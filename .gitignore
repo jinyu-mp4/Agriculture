@@ -1,0 +1,17 @@
+# 编译产物
+build/
+Debug/
+Release/
+
+# CubeMX 生成文件
+.mxproject
+
+# Claude Code 本地配置
+.claude/
+
+# 从别处拷来的参考工程
+others/
+
+# 系统杂项
+Thumbs.db
+Desktop.ini
