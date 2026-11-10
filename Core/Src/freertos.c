@@ -55,30 +55,29 @@ volatile uint16_t g_right_mm;
 volatile bool     g_front_valid;
 volatile bool     g_right_valid;
 
-/* DataTask 线程句柄与属性（LCD 显示 + 传感器数据刷新） */
-osThreadId_t DataTaskHandle;
-const osThreadAttr_t DataTask_attributes = {
-  .name = "DataTask",
+/* USER CODE END Variables */
+/* Definitions for Chassis_Task */
+osThreadId_t Chassis_TaskHandle;
+const osThreadAttr_t Chassis_Task_attributes = {
+  .name = "Chassis_Task",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal1,
+};
+/* Definitions for Data_Task */
+osThreadId_t Data_TaskHandle;
+const osThreadAttr_t Data_Task_attributes = {
+  .name = "Data_Task",
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
-};
-
-/* USER CODE END Variables */
-/* Definitions for CHASSIS_Task */
-osThreadId_t CHASSIS_TaskHandle;
-const osThreadAttr_t CHASSIS_Task_attributes = {
-  .name = "CHASSIS_Task",
-  .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 static void chassis_move_until(ZDT_MoveDir dir, LaserID laser, bool until_le, uint16_t threshold_mm);
-void StartData_Task(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartChassis_Task(void *argument);
+void StartData_Task(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -109,11 +108,14 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
-  /* creation of CHASSIS_Task */
-  CHASSIS_TaskHandle = osThreadNew(StartChassis_Task, NULL, &CHASSIS_Task_attributes);
+  /* creation of Chassis_Task */
+  Chassis_TaskHandle = osThreadNew(StartChassis_Task, NULL, &Chassis_Task_attributes);
+
+  /* creation of Data_Task */
+  Data_TaskHandle = osThreadNew(StartData_Task, NULL, &Data_Task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  DataTaskHandle = osThreadNew(StartData_Task, NULL, &DataTask_attributes);
+  /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -267,3 +269,4 @@ static void chassis_move_until(ZDT_MoveDir dir, LaserID laser, bool until_le, ui
     ZDT_Chassis_Stop();
 }
 /* USER CODE END Application */
+

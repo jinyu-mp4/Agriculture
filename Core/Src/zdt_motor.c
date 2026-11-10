@@ -12,7 +12,7 @@
   *          snF=1 时只缓存不执行；四台都缓存后发广播 [0x00 0xFF 0x66 0x6B]
   *          统一触发，四轮同时启动/变速。
   *
-  *          只发不收：写命令用阻塞发送、忽略应答，不挂起、不读编码器。
+  *          只发不收：写命令用 DMA 发送、忽略应答，不挂起、不读编码器。
   ******************************************************************************
   */
 
@@ -80,16 +80,35 @@ static void zdt_flush_rx(UART_HandleTypeDef *huart)
     __HAL_UART_CLEAR_OREFLAG(huart);
 }
 
-/** 只发不收：阻塞发送一帧，忽略电机应答。发送前清掉接收残留与溢出标志，
- *  避免多机总线上的应答字节在下一次发送前把硬件 RX 搞成溢出(ORE)。 */
+/** 只发不收：DMA 发送一帧，忽略电机应答。发送前清掉接收残留与溢出标志，
+ *  避免多机总线上的应答字节在下一次发送前把硬件 RX 搞成溢出(ORE)。
+ *  命令帧 buffer 位于上层函数的栈上，因此必须等 DMA 发送完成才能返回。 */
 static bool zdt_send_frame(UART_HandleTypeDef *huart, const uint8_t *cmd, uint16_t len)
 {
+    uint32_t start;
+
     __HAL_UART_CLEAR_OREFLAG(huart);
     while (__HAL_UART_GET_FLAG(huart, UART_FLAG_RXNE) != RESET)
     {
         (void)(uint8_t)(huart->Instance->DR & 0xFFU);
     }
-    return HAL_UART_Transmit(huart, (uint8_t *)cmd, len, ZDT_UART_TIMEOUT_MS) == HAL_OK;
+
+    /* 用 DMA 发送（非阻塞），DMA 完成后由传输完成中断把 gState 置回 READY */
+    if (HAL_UART_Transmit_DMA(huart, (uint8_t *)cmd, len) != HAL_OK)
+    {
+        return false;
+    }
+
+    start = HAL_GetTick();
+    while (HAL_UART_GetState(huart) != HAL_UART_STATE_READY)
+    {
+        if ((HAL_GetTick() - start) > ZDT_UART_TIMEOUT_MS)
+        {
+            return false;   /* 超时：DMA 未在预期时间内完成 */
+        }
+    }
+
+    return true;
 }
 
 /* 前置声明：多机同步触发命令 */
