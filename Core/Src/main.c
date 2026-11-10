@@ -26,7 +26,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "lcd_spi_154.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -98,7 +98,7 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-  //SPI_LCD_Init();	  /* 暂时不用液晶屏 */
+  SPI_LCD_Init();	  /* 初始化液晶屏 */
   /* USER CODE END 2 */
 
   /* Init scheduler */
