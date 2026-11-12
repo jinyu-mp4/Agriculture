@@ -25,7 +25,6 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "imu601.h"
 #include "laser.h"
 #include "zdt_motor.h"
 #include "lcd_spi_154.h"
@@ -49,7 +48,6 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 /* 传感器共享数据：由 DataTask 定时刷新，其他任务只读 */
-volatile float    g_yaw_deg;
 volatile uint16_t g_front_mm;
 volatile uint16_t g_right_mm;
 volatile bool     g_front_valid;
@@ -136,12 +134,11 @@ void StartChassis_Task(void *argument)
   /* USER CODE BEGIN StartChassis_Task */
   int state = 0;
 
-  /* 上电初始化：电机、激光、陀螺仪（陀螺仪复位+校准内部含约 500ms 延时） */
+  /* 上电初始化：电机、激光 */
   ZDT_Motor_Init();
   Laser_Init();
-  IMU601_Init();
 
-  /* 等待 5000ms，等待陀螺仪初始化/稳定 */
+  /* 上电后等待 5s：待激光测距稳定后再开始走 */
   osDelay(5000);
 
   for (;;)
@@ -151,41 +148,41 @@ void StartChassis_Task(void *argument)
       case 0:   /* 向右行驶，直到 right <= 359.5cm (3595mm) */
         chassis_move_until(MOVE_RIGHT, LASER_RIGHT, true, 3595);
         break;
-      case 1:   /* 向后行驶，直到 front >= 266cm (2660mm) */
-        chassis_move_until(MOVE_BACKWARD, LASER_FRONT, false, 2660);
+      case 1:   /* 向后行驶（横向居中），直到 front >= 256cm (2560mm) */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, false, 2560);
         break;
       case 2:   /* 向右行驶，直到 right <= 289.5cm (2895mm) */
         chassis_move_until(MOVE_RIGHT, LASER_RIGHT, true, 2895);
         break;
-      case 3:   /* 向前行驶，直到 front <= 6cm (60mm) */
-        chassis_move_until(MOVE_FORWARD, LASER_FRONT, true, 60);
+      case 3:   /* 向前行驶（横向居中），直到 front <= 6cm (50mm) */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 50);
         break;
       case 4:   /* 向右行驶，直到 right <= 219.5cm (2195mm) */
         chassis_move_until(MOVE_RIGHT, LASER_RIGHT, true, 2195);
         break;
-      case 5:   /* 向后行驶，直到 front >= 266cm (2660mm) */
-        chassis_move_until(MOVE_BACKWARD, LASER_FRONT, false, 2660);
+      case 5:   /* 向后行驶（横向居中），直到 front >= 256cm (2560mm) */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, false, 2560);
         break;
       case 6:   /* 向右行驶，直到 right <= 149.5cm (1495mm) */
         chassis_move_until(MOVE_RIGHT, LASER_RIGHT, true, 1495);
         break;
-      case 7:   /* 向前行驶，直到 front <= 6cm (60mm) */
-        chassis_move_until(MOVE_FORWARD, LASER_FRONT, true, 60);
+      case 7:   /* 向前行驶（横向居中），直到 front <= 6cm (50mm) */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 50);
         break;
       case 8:   /* 向右行驶，直到 right <= 79.5cm (795mm) */
         chassis_move_until(MOVE_RIGHT, LASER_RIGHT, true, 795);
         break;
-      case 9:   /* 向后行驶，直到 front >= 266cm (2660mm) */
-        chassis_move_until(MOVE_BACKWARD, LASER_FRONT, false, 2660);
+      case 9:   /* 向后行驶（横向居中），直到 front >= 256cm (2560mm) */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, false, 2560);
         break;
       case 10:  /* 向右行驶，直到 right <= 9.5cm (95mm) */
         chassis_move_until(MOVE_RIGHT, LASER_RIGHT, true, 95);
         break;
-      case 11:  /* 向前行驶，直到 front <= 6cm (60mm) */
-        chassis_move_until(MOVE_FORWARD, LASER_FRONT, true, 60);
+      case 11:  /* 向前行驶（横向居中），直到 front <= 6cm (50mm) */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 50);
         break;
-      case 12:  /* 向左行驶，直到 right >= 400cm (4000mm) */
-        chassis_move_until(MOVE_LEFT, LASER_RIGHT, false, 4000);
+      case 12:  /* 向左行驶 4m + 前侧激光纵向居中（纵向 PID，目标 50mm） */
+        ZDT_Chassis_Drive_LongCenter(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, 4200.0f);
         break;
 
       default:  /* 全部动作完成：停车待机 */
@@ -211,7 +208,7 @@ void StartChassis_Task(void *argument)
 void StartData_Task(void *argument)
 {
   /* USER CODE BEGIN StartData_Task */
-  /* 传感器数据采集任务：50Hz 定时读取 yaw + 两路激光距离，写入共享变量 */
+  /* 传感器数据采集任务：50Hz 定时读取两路激光距离，写入共享变量 */
 
   /* LCD 显示初始化：设置字体与数字补位方式 */
   LCD_SetAsciiFont(&ASCII_Font16);
@@ -219,16 +216,12 @@ void StartData_Task(void *argument)
 
   for (;;)
   {
-    g_yaw_deg     = IMU601_GetYaw();
     g_front_mm    = Laser_GetDistance(LASER_FRONT);
     g_right_mm    = Laser_GetDistance(LASER_RIGHT);
     g_front_valid = Laser_IsValid(LASER_FRONT);
     g_right_valid = Laser_IsValid(LASER_RIGHT);
 
-    /* 将三个读取值显示在 LCD 上 */
-    LCD_DisplayString(10, 30, "Yaw  :");
-    LCD_DisplayDecimals(70, 30, (double)g_yaw_deg, 7, 1);
-
+    /* 将两个读取值显示在 LCD 上 */
     LCD_DisplayString(10, 60, "Front:");
     LCD_DisplayNumber(70, 60, (int32_t)g_front_mm, 5);
 
