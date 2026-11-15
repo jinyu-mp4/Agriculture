@@ -7,7 +7,7 @@
   *            <0x20> 距离(mm) <0x2C> <0x20> 置信度 <0x0A>
   *          有效距离 20~4000mm，置信度 0~100，超范围视为无效。
   *
-  *          接收方式：USART2/USART3 单字节中断接收，在
+  *          接收方式：USART1/USART2/USART3 单字节中断接收，在
   *          HAL_UART_RxCpltCallback 里逐字节拼帧，不占用任务时间片。
   ******************************************************************************
   */
@@ -43,6 +43,7 @@ static LaserDev s_laser[LASER_NUM] =
 {
     { .huart = &huart2 },   /* LASER_RIGHT 右侧 */
     { .huart = &huart3 },   /* LASER_FRONT 前侧 */
+    { .huart = &huart1 },   /* LASER_BACK 后侧 */
 };
 
 /** 把收到的 1 个字节喂给状态机 */
@@ -129,6 +130,7 @@ static LaserID laser_uart_to_id(UART_HandleTypeDef *huart)
 {
     if (huart == &huart2) return LASER_RIGHT;
     if (huart == &huart3) return LASER_FRONT;
+    if (huart == &huart1) return LASER_BACK;
     return LASER_NUM;
 }
 
@@ -136,6 +138,7 @@ void Laser_Init(void)
 {
     HAL_UART_Receive_IT(&huart2, &s_laser[LASER_RIGHT].rx_byte, 1);
     HAL_UART_Receive_IT(&huart3, &s_laser[LASER_FRONT].rx_byte, 1);
+    HAL_UART_Receive_IT(&huart1, &s_laser[LASER_BACK].rx_byte, 1);
 }
 
 void Laser_FeedByte(UART_HandleTypeDef *huart)

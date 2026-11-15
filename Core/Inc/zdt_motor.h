@@ -16,6 +16,7 @@
   *
   *          全车串口规划：
   *            UART5   PC12/PD2   -> 四个 ZDT 电机(本文件)
+  *            USART1  PA9/PA10   -> 后侧激光测距(见 laser)
   *            USART2  PA2/PA3    -> 右侧激光测距(见 laser)
   *            USART3  PB10/PB11  -> 前侧激光测距(见 laser)
   ******************************************************************************
@@ -80,7 +81,7 @@ extern "C" {
 #define ZDT_LAT_RANGE_MAX_MM         (400)
 
 /** 横向居中目标墙距(mm)：误差 = 目标值 - 实测右侧距离。按实车摆正后标定 */
-#define ZDT_LAT_TARGET_MM            (85)
+#define ZDT_LAT_TARGET_MM            (52.5f)   /* 原 45mm，按实测再 +7.5mm */
 
 /** 横向 PID 增益：误差单位 mm，输出为横移修正转速(RPM)。
  *  Kp = 每 1mm 横向误差产生的修正转速。 */
@@ -94,18 +95,23 @@ extern "C" {
 /** 横向修正方向取反开关：若实测“越修越偏”，把 0 改成 1 */
 #define ZDT_LAT_DIR_INVERT           (0)
 
-/* —— 激光纵向居中 PID（前侧激光 → 麦轮前后分量，用于左右平移 4m 时的纵向保持）—— */
+/* —— 激光纵向居中 PID（前/后侧激光 → 麦轮前后分量，用于左右平移时的纵向保持）—— */
 
 /** 纵向闭环控制周期(ms)。激光出数频率 30Hz（约 33ms/帧），控制环取 33ms 与之匹配 */
 #define ZDT_LON_LOOP_MS              (33)
 
-/** 纵向墙距有效范围(mm)：只有前侧激光读数在此范围内才认为“前方有田垄/围栏”
- *  可做纵向修正；低于下限或高于上限视为前方无墙，前后修正清零、开环平移。 */
+/** 纵向墙距有效范围(mm)：只有前/后侧激光读数在此范围内才认为“前方/后方有田垄/围栏”
+ *  可做纵向修正；低于下限或高于上限视为该方向无墙，前后修正清零、开环平移。 */
 #define ZDT_LON_RANGE_MIN_MM         (20)
 #define ZDT_LON_RANGE_MAX_MM         (400)
 
-/** 纵向保持目标墙距(mm)：误差 = 目标值 - 实测前侧距离。按实车摆正后标定 */
-#define ZDT_LON_TARGET_MM            (50)
+/** 纵向保持目标墙距(mm)，前侧激光专用（state 0/4/8/12）：
+ *  误差 = 目标值 - 实测前侧距离。按实车摆正后标定 */
+#define ZDT_LON_TARGET_MM            (40)
+
+/** 纵向保持目标墙距(mm)，后侧激光专用：用 back 作参考坐标时以该值为目标。
+ *  前/后侧激光安装位置不一致，所以两者单独标定。 */
+#define ZDT_LON_TARGET_BACK_MM       (75)
 
 /** 纵向 PID 增益：误差单位 mm，输出为前后修正转速(RPM)。 */
 #define ZDT_LON_KP                   (1.0f)
@@ -117,7 +123,6 @@ extern "C" {
 
 /** 纵向修正方向取反开关：若实测“越修越偏”，把 0 改成 1 */
 #define ZDT_LON_DIR_INVERT           (0)
-
 /** 多机同步下发时相邻两条电机命令的间隔(ms)。间隔太短可能出现“粘包”
  *  （电机把两帧当一帧）；示例工程用 10ms，这里取 2ms 已足够。 */
 #define ZDT_SYNC_CMD_GAP_MS          (2)
@@ -178,18 +183,25 @@ bool ZDT_Chassis_Rotate_Speed(int16_t rpm);
 
 /** 前后直行 + 右侧激光横向居中（闭环）：向 dir 方向以 base_rpm 连续行驶，
  *  每个控制周期读右侧激光做横向 PID（目标 ZDT_LAT_TARGET_MM，有效范围 20~400mm），
- *  直到前侧激光满足停止条件才停车。dir 仅用于 MOVE_FORWARD / MOVE_BACKWARD。
- *  阻塞式：内部循环到前激光触发才返回。
- *  until_le = true  : 前激光 <= stop_mm 停车（前进）
- *  until_le = false : 前激光 >= stop_mm 停车（后退） */
+ *  直到指定激光满足停止条件才停车。dir 仅用于 MOVE_FORWARD / MOVE_BACKWARD。
+ *  阻塞式：内部循环到指定激光触发才返回。
+ *  until_le = true  : 指定激光 <= stop_mm 停车
+ *  until_le = false : 指定激光 >= stop_mm 停车 */
 bool ZDT_Chassis_Drive_LaserCenter(ZDT_MoveDir dir, int16_t base_rpm,
-                                   LaserID front_laser, bool until_le, uint16_t stop_mm);
+                                   LaserID stop_laser, bool until_le, uint16_t stop_mm);
 
 /** 左右平移 + 前侧激光纵向居中（闭环）：向 dir 方向以 base_rpm 连续行驶 distance_mm，
  *  每个控制周期读前侧激光做纵向 PID（目标 ZDT_LON_TARGET_MM，有效范围 20~400mm），
  *  把前后修正量叠加到四轮转速上，行驶完指定距离后停车。dir 仅用于 MOVE_LEFT / MOVE_RIGHT。
  *  阻塞式。 */
 bool ZDT_Chassis_Drive_LongCenter(ZDT_MoveDir dir, int16_t base_rpm, float distance_mm);
+
+/** 左右平移 + 前/后激光纵向居中（闭环）：向 dir 方向以 base_rpm 连续行驶，
+ *  每个控制周期读 lon_laser（前侧或后侧激光）做纵向 PID（目标 ZDT_LON_TARGET_MM，
+ *  有效范围 20~400mm），把前后修正量叠加到四轮转速上，直到右侧激光 <= stop_mm 停车。
+ *  dir 仅用于 MOVE_LEFT / MOVE_RIGHT。阻塞式。 */
+bool ZDT_Chassis_Drive_LatCenter(ZDT_MoveDir dir, int16_t base_rpm,
+                                 LaserID lon_laser, uint16_t stop_mm);
 
 /** 估算行驶指定距离所需的运动时间(ms)，按当前默认速度计算并含 20% 余量 */
 uint32_t ZDT_Move_Duration_Ms(float distance_mm);
