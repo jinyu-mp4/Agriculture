@@ -18,10 +18,11 @@
 
 | 串口 | 引脚 | 用途 | 方向 |
 |------|------|------|------|
-| UART5 | PC12(TX) / PD2(RX) | 4 个 ZDT 电机（地址 1~4） | 只发 |
+| UART5 | PC12(TX) / PD2(RX) | 7 个 ZDT 电机（地址 1~4 底盘，5~7 塔台） | 只发 |
 | USART1 | PA9(TX) / PA10(RX) | **后侧**激光测距 | 只收 |
 | USART2 | PA2(TX) / PA3(RX) | **右侧**激光测距 | 只收 |
 | USART3 | PB10(TX) / PB11(RX) | **前侧**激光测距 | 只收 |
+| UART4 | PA0(TX) / PA1(RX) | **上位机 Jetson 坐标**（`$x,y`） | 只收 |
 
 激光模块接线时注意：模块的 **TX 接 MCU 的 RX**（PA10 / PA3 / PB11），波特率 115200 8N1。
 
@@ -94,7 +95,8 @@ make download_jlink  # 用 J-Link 烧录
 | 任务 | 优先级 | 职责 |
 |------|--------|------|
 | `Chassis_Task` | BelowNormal1 | 底盘状态机：调用阻塞式的运动函数，逐个执行动作 |
-| `Data_Task` | Normal | 50Hz 读取三路激光，刷新共享变量，在 LCD 上显示 |
+| `Data_Task` | Normal | 50Hz 读取三路激光 + 上位机坐标，刷新共享变量，在 LCD 上显示 |
+| `Tower_Task` | AboveNormal | 塔台作业：视觉纠偏 + 升降抓取 |
 
 共享变量（`freertos.c` 顶部）：`g_front_mm` / `g_right_mm` / `g_back_mm` 及对应的 `*_valid` 标志，由 `Data_Task` 写入、其他任务只读。
 
@@ -108,22 +110,22 @@ Back:  8901
 
 ### 底盘状态机（`StartChassis_Task`）
 
-上电后 `ZDT_Motor_Init()` + `Laser_Init()`，**等待 5 秒**（等激光出数稳定）再开始动作。
+上电后 `ZDT_Motor_Init()` + `Laser_Init()`，**等待 PC1 按钮按下后 2 秒**再开始动作。
 
 | state | 动作 | 纵向纠偏 | 停车条件 |
 |-------|------|---------|---------|
 | 0 | 向右平移 | front，目标 40mm | right ≤ 3595mm |
-| 1 | 向后直行 + 横向居中 | — | back ≤ 50mm |
+| 1 | 向后直行 + 横向居中 | — | back ≤ 80mm |
 | 2 | 向右平移 | back，目标 75mm | right ≤ 2895mm |
-| 3 | 向前直行 + 横向居中 | — | front ≤ 50mm |
+| 3 | 向前直行 + 横向居中 | — | front ≤ 70mm |
 | 4 | 向右平移 | front，目标 40mm | right ≤ 2195mm |
-| 5 | 向后直行 + 横向居中 | — | back ≤ 50mm |
+| 5 | 向后直行 + 横向居中 | — | back ≤ 80mm |
 | 6 | 向右平移 | back，目标 75mm | right ≤ 1495mm |
-| 7 | 向前直行 + 横向居中 | — | front ≤ 50mm |
+| 7 | 向前直行 + 横向居中 | — | front ≤ 70mm |
 | 8 | 向右平移 | front，目标 40mm | right ≤ 795mm |
-| 9 | 向后直行 + 横向居中 | — | back ≤ 50mm |
+| 9 | 向后直行 + 横向居中 | — | back ≤ 80mm |
 | 10 | 向右平移 | back，目标 75mm | right ≤ 95mm |
-| 11 | 向前直行 + 横向居中 | — | front ≤ 50mm |
+| 11 | 向前直行 + 横向居中 | — | front ≤ 70mm |
 | 12 | 向左平移 4200mm | front，目标 40mm | 行驶距离到达 |
 | 默认 | 停车待机 | — | — |
 

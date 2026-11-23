@@ -27,6 +27,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lcd_spi_154.h"
+#include "jetson_coord.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,8 +98,11 @@ int main(void)
   MX_USART3_UART_Init();
   MX_UART5_Init();
   MX_SPI3_Init();
+  MX_UART4_Init();
+  MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   SPI_LCD_Init();	  /* 初始化液晶屏 */
+  Coord_Init();         /* 启动 UART4 单字节接收：上位机 Jetson 坐标 */
   /* USER CODE END 2 */
 
   /* Init scheduler */

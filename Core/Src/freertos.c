@@ -27,6 +27,9 @@
 /* USER CODE BEGIN Includes */
 #include "laser.h"
 #include "zdt_motor.h"
+#include "tower_motor.h"
+#include "jetson_coord.h"
+#include "claw.h"
 #include "lcd_spi_154.h"
 #include "lcd_fonts.h"
 /* USER CODE END Includes */
@@ -38,6 +41,20 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+/* 塔台捡拾控制参数 */
+#define TOWER_TRIGGER_Y_ERR    50     /* |err_y| <= 50 触发塔台作业 */
+#define TOWER_CORR_DEADBAND    10     /* 纠偏死区：|误差| <= 10 像素视为已对准 */
+#define TOWER_CORR_IN_POS_CNT  8      /* 连续 N 次在死区内才算对准（防抖动） */
+#define TOWER_CORR_K_Y         1.0f   /* 转台(电机5)纠 Y 的比例增益 */
+#define TOWER_CORR_K_X         0.5f   /* 作业臂(电机6)纠 X 的比例增益 */
+#define TOWER_CORR_MAX_PULSES  800    /* 单次纠偏最大脉冲（限幅，防冲过头） */
+#define TOWER_CORR_MAX_ITER    30     /* 单轴纠偏最大次数（防停不下来） */
+#define TOWER_CORR_DELAY_MS    150    /* 每次纠偏后等待电机+视觉更新的时间 */
+#define TOWER_LIFT_PULSES_PER_MM  164.95f   /* 实测：3200 脉冲下降 19.4mm */
+#define TOWER_LIFT_DOWN_MM        79.0f     /* 下降高度(mm)，自由改这里 */
+#define TOWER_LIFT_DOWN_PULSES    ((int32_t)(TOWER_LIFT_DOWN_MM * TOWER_LIFT_PULSES_PER_MM))
+#define TOWER_LIFT_WAIT_MS     3000   /* 下降后停留 3s */
+#define TOWER_POST_DELAY_MS    2000   /* 作业完成后恢复底盘前的等待 */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -55,6 +72,14 @@ volatile bool     g_front_valid;
 volatile bool     g_right_valid;
 volatile bool     g_back_valid;
 
+/* 上位机 Jetson 传来的物块坐标（Data_Task 刷新，其他任务只读） */
+volatile int32_t  g_coord_x;
+volatile int32_t  g_coord_y;
+volatile bool     g_coord_valid;
+
+/* 底盘暂停标志：塔台作业时置 true，底盘运动函数检测后停车 */
+volatile bool     g_tower_working = false;
+
 /* USER CODE END Variables */
 /* Definitions for Chassis_Task */
 osThreadId_t Chassis_TaskHandle;
@@ -65,10 +90,17 @@ const osThreadAttr_t Chassis_Task_attributes = {
 };
 /* Definitions for Data_Task */
 osThreadId_t Data_TaskHandle;
-const osThreadAttr_t Data_Task_attributes = {
+const osThreadAttr_t Data_Task_attributes = { 
   .name = "Data_Task",
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for Tower_Task */
+osThreadId_t Tower_TaskHandle;
+const osThreadAttr_t Tower_Task_attributes = {
+  .name = "Tower_Task",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -78,6 +110,7 @@ const osThreadAttr_t Data_Task_attributes = {
 
 void StartChassis_Task(void *argument);
 void StartData_Task(void *argument);
+void StartTask03(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -113,6 +146,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of Data_Task */
   Data_TaskHandle = osThreadNew(StartData_Task, NULL, &Data_Task_attributes);
+
+  /* creation of Tower_Task */
+  Tower_TaskHandle = osThreadNew(StartTask03, NULL, &Tower_Task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -218,6 +254,8 @@ void StartData_Task(void *argument)
 
   for (;;)
   {
+    CoordPoint pt;
+
     g_front_mm    = Laser_GetDistance(LASER_FRONT);
     g_right_mm    = Laser_GetDistance(LASER_RIGHT);
     g_back_mm     = Laser_GetDistance(LASER_BACK);
@@ -225,7 +263,15 @@ void StartData_Task(void *argument)
     g_right_valid = Laser_IsValid(LASER_RIGHT);
     g_back_valid  = Laser_IsValid(LASER_BACK);
 
-    /* 将三个读取值显示在 LCD 上 */
+    /* 实时读取上位机传来的物块坐标 */
+    g_coord_valid = Coord_GetPoint(&pt);
+    if (g_coord_valid)
+    {
+        g_coord_x = pt.x;
+        g_coord_y = pt.y;
+    }
+
+    /* 将读取值显示在 LCD 上 */
     LCD_DisplayString(10, 60, "Front:");
     LCD_DisplayNumber(70, 60, (int32_t)g_front_mm, 5);
 
@@ -235,9 +281,139 @@ void StartData_Task(void *argument)
     LCD_DisplayString(10, 120, "Back:");
     LCD_DisplayNumber(70, 120, (int32_t)g_back_mm, 5);
 
-    osDelay(20);   /* 20ms = 70Hz */
+    LCD_DisplayString(10, 150, "X:");
+    LCD_DisplayNumber(70, 150, g_coord_x, 5);
+
+    LCD_DisplayString(10, 180, "Y:");
+    LCD_DisplayNumber(70, 180, g_coord_y, 5);
+
+    osDelay(20);   /* 20ms = 50Hz */
   }
   /* USER CODE END StartData_Task */
+}
+
+/* USER CODE BEGIN Header_StartTask03 */
+/**
+* @brief Function implementing the Tower_Task thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTask03 */
+void StartTask03(void *argument)
+{
+  /* USER CODE BEGIN StartTask03 */
+  int32_t err_x, err_y;
+  int32_t off_5 = 0, off_6 = 0, off_7 = 0;   /* 各电机相对初始位置的累计脉冲偏移 */
+
+  TowerMotor_Init();
+  TowerMotor_Enable(TOWER_TURNTABLE, true);
+  TowerMotor_Enable(TOWER_ARM, true);
+  TowerMotor_Enable(TOWER_LIFT, true);
+
+  Claw_Open();   /* 初始状态：夹爪打开 */
+  osDelay(500);
+
+  for (;;)
+  {
+    /* 1. 等触发：收到有效坐标，且 |err_y| <= 50 */
+    for (;;)
+    {
+      if (g_coord_valid)
+      {
+        err_y = g_coord_y - TOWER_Y_TARGET;
+        if (err_y > -TOWER_TRIGGER_Y_ERR && err_y < TOWER_TRIGGER_Y_ERR)
+        {
+          break;
+        }
+      }
+      osDelay(20);
+    }
+
+    /* 暂停底盘 */
+    g_tower_working = true;
+    osDelay(100);
+
+    /* 2. 电机 5（转台）：纠偏 Y，记录偏移 */
+    int in_pos_y = 0;
+    for (int i = 0; i < TOWER_CORR_MAX_ITER; i++)
+    {
+      err_y = g_coord_y - TOWER_Y_TARGET;
+      if (err_y > -TOWER_CORR_DEADBAND && err_y < TOWER_CORR_DEADBAND)
+      {
+        if (++in_pos_y >= TOWER_CORR_IN_POS_CNT) break;
+        osDelay(TOWER_CORR_DELAY_MS);
+        continue;
+      }
+      in_pos_y = 0;
+
+      int32_t pulses = (int32_t)((float)err_y * TOWER_CORR_K_Y);
+      if (pulses >  TOWER_CORR_MAX_PULSES) pulses =  TOWER_CORR_MAX_PULSES;
+      if (pulses < -TOWER_CORR_MAX_PULSES) pulses = -TOWER_CORR_MAX_PULSES;
+      pulses = -pulses;   /* 电机5 纠偏方向取反 */
+
+      TowerMotor_Move(TOWER_TURNTABLE, pulses);
+      off_5 += pulses;
+      osDelay(TOWER_CORR_DELAY_MS);
+    }
+
+    /* 3. 电机 6（作业臂）：纠偏 X，记录偏移 */
+    int in_pos_x = 0;
+    for (int i = 0; i < TOWER_CORR_MAX_ITER; i++)
+    {
+      err_x = g_coord_x - TOWER_X_TARGET;
+      if (err_x > -TOWER_CORR_DEADBAND && err_x < TOWER_CORR_DEADBAND)
+      {
+        if (++in_pos_x >= TOWER_CORR_IN_POS_CNT) break;
+        osDelay(TOWER_CORR_DELAY_MS);
+        continue;
+      }
+      in_pos_x = 0;
+
+      int32_t pulses = (int32_t)((float)err_x * TOWER_CORR_K_X);
+      if (pulses >  TOWER_CORR_MAX_PULSES) pulses =  TOWER_CORR_MAX_PULSES;
+      if (pulses < -TOWER_CORR_MAX_PULSES) pulses = -TOWER_CORR_MAX_PULSES;
+
+      TowerMotor_Move(TOWER_ARM, pulses);
+      off_6 += pulses;
+      osDelay(TOWER_CORR_DELAY_MS);
+    }
+
+    /* 4. 电机 7 下降 79mm -> 停1s -> 夹爪闭合 -> 等1s */
+    TowerMotor_Move(TOWER_LIFT, -TOWER_LIFT_DOWN_PULSES);
+    off_7 -= TOWER_LIFT_DOWN_PULSES;
+    osDelay(1500);          /* 等下降到位 */
+    osDelay(1000);          /* 停 1s */
+    Claw_Close();
+    osDelay(1000);          /* 等 1s */
+
+    /* 5. 电机 7 复位 -> 复位后等 1s */
+    TowerMotor_Move(TOWER_LIFT, -off_7);
+    off_7 = 0;
+    osDelay(1500);          /* 等电机7复位到位 */
+    osDelay(1000);          /* 复位后等 1s */
+
+    /* 6. 电机 5 移到「初始位置向左 3700 脉冲」处 */
+    TowerMotor_Move(TOWER_TURNTABLE, -3700 - off_5);
+    off_5 = -3700;
+    osDelay(2200);          /* 等电机5 到位（3700 脉冲 @33RPM ≈ 2.1s） */
+    osDelay(1000);          /* 停 1s */
+
+    /* 7. 夹爪打开（放蛋） */
+    Claw_Open();
+    osDelay(500);
+
+    /* 8. 所有电机回到初始位置 */
+    TowerMotor_Move(TOWER_TURNTABLE, -off_5);
+    TowerMotor_Move(TOWER_ARM, -off_6);
+    TowerMotor_Move(TOWER_LIFT, -off_7);
+    off_5 = off_6 = off_7 = 0;
+    osDelay(3000);
+
+    /* 9. 恢复底盘，等下一次触发 */
+    g_tower_working = false;
+    osDelay(TOWER_POST_DELAY_MS);
+  }
+  /* USER CODE END StartTask03 */
 }
 
 /* Private application code --------------------------------------------------*/
