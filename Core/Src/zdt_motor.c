@@ -18,6 +18,7 @@
 
 #include "zdt_motor.h"
 #include "laser.h"
+#include "jetson_coord.h"
 #include "pid.h"
 #include "cmsis_os.h"
 
@@ -51,8 +52,8 @@ static const ZDT_MotorDef s_motor[MOTOR_NUM] =
 static const int8_t s_dir_table[4][MOTOR_NUM] =
 {
     /*           LF   RF   LR   RR */
-    /* 前进 */ { 1,  1,  -1,  -1 },
-    /* 后退 */ { -1,  -1,  1,  1 },
+    /* 前进 */ { -1,  -1,  -1,  -1 },
+    /* 后退 */ { 1,  1,  1,  1 },
     /* 左移 */ { -1,  +1,  -1,  +1 },
     /* 右移 */ { +1,  -1,  +1,  -1 },
 };
@@ -666,6 +667,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         Laser_FeedByte(huart);
         return;
     }
+
+    /* UART4 = 上位机 Jetson 坐标 */
+    if (huart == &huart4)
+    {
+        Coord_FeedByte(huart);
+        return;
+    }
 }
 
 /** 串口出错（如溢出 ORE/帧错 FE）：恢复对应驱动的单字节接收，避免断流 */
@@ -674,6 +682,12 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     if (huart == &huart1 || huart == &huart2 || huart == &huart3)
     {
         Laser_UART_Error(huart);
+        return;
+    }
+
+    if (huart == &huart4)
+    {
+        Coord_UART_Error(huart);
         return;
     }
 }

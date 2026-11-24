@@ -8,7 +8,7 @@
   *              <0x20 空格> <距离 mm 十进制字符串> <0x2C 逗号>
   *              <0x20 空格> <置信度 0~100> <0x0A 换行>
   *            例：" 1234, 45\n" 表示距离 1234mm、置信度 45。
-  *            有效距离 20~4000mm；置信度 0~100。
+  *            有效距离 20~5000mm；置信度 0~100，含低置信度读数。
   *
   *          接线：
   *            USART2  PA3=RX  -> 右侧激光
@@ -58,7 +58,7 @@ void Laser_UART_Error(UART_HandleTypeDef *huart);
 /** 读取最新距离(mm)；尚未收到有效数据时返回 0 */
 uint16_t Laser_GetDistance(LaserID id);
 
-/** 读取最新置信度(0~62) */
+/** 读取最新有效帧的置信度(0~100) */
 uint8_t Laser_GetConfidence(LaserID id);
 
 /** 是否已收到过至少一帧有效数据 */

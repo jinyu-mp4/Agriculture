@@ -80,6 +80,9 @@ volatile bool     g_coord_valid;
 /* 底盘暂停标志：塔台作业时置 true，底盘运动函数检测后停车 */
 volatile bool     g_tower_working = false;
 
+/* 底盘状态机当前状态号（Chassis_Task 写，Data_Task 只读显示） */
+volatile int32_t  g_state = 0;
+
 /* USER CODE END Variables */
 /* Definitions for Chassis_Task */
 osThreadId_t Chassis_TaskHandle;
@@ -170,7 +173,7 @@ void MX_FREERTOS_Init(void) {
 void StartChassis_Task(void *argument)
 {
   /* USER CODE BEGIN StartChassis_Task */
-  int state = 0;
+  g_state = 0;
 
   /* 上电初始化：电机、激光 */
   ZDT_Motor_Init();
@@ -181,45 +184,45 @@ void StartChassis_Task(void *argument)
 
   for (;;)
   {
-    switch (state)
+    switch (g_state)
     {
-      case 0:   /* 向右行驶 + front 纵向居中(70mm)，直到 right <= 359.5cm (3595mm) */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 3595);
+      case 0:   /* 向右行驶 + front 纵向居中(40mm)，直到 right <= 3500mm */
+        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 3500);
         break;
-      case 1:   /* 向后行驶（横向居中），直到 back <= 5cm (70mm) */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 80);
+      case 1:   /* 向后行驶（横向居中），直到 back <= 105mm */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 105);
         break;
-      case 2:   /* 向右行驶 + back 纵向居中(70mm)，直到 right <= 289.5cm (2895mm) */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 2895);
+      case 2:   /* 向右行驶 + back 纵向居中(75mm)，直到 right <= 2850mm */
+        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 2850);
         break;
-      case 3:   /* 向前行驶（横向居中），直到 front <= 5cm (70mm) */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 70);
+      case 3:   /* 向前行驶（横向居中），直到 front <= 62mm */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 62);
         break;
-      case 4:   /* 向右行驶 + front 纵向居中(70mm)，直到 right <= 219.5cm (2195mm) */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 2195);
+      case 4:   /* 向右行驶 + front 纵向居中(40mm)，直到 right <= 2130mm */
+        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 2130);
         break;
-      case 5:   /* 向后行驶（横向居中），直到 back <= 5cm (70mm) */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 80);
+      case 5:   /* 向后行驶（横向居中），直到 back <= 74mm */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 74);
         break;
-      case 6:   /* 向右行驶 + back 纵向居中(70mm)，直到 right <= 149.5cm (1495mm) */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 1495);
+      case 6:   /* 向右行驶 + back 纵向居中(75mm)，直到 right <= 1455mm */
+        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 1455);
         break;
-      case 7:   /* 向前行驶（横向居中），直到 front <= 5cm (70mm) */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 70);
+      case 7:   /* 向前行驶（横向居中），直到 front <= 62mm */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 62);
         break;
-      case 8:   /* 向右行驶 + front 纵向居中(70mm)，直到 right <= 79.5cm (795mm) */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 795);
+      case 8:   /* 向右行驶 + front 纵向居中(40mm)，直到 right <= 775mm */
+        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 775);
         break;
-      case 9:   /* 向后行驶（横向居中），直到 back <= 5cm (70mm) */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 80);
+      case 9:   /* 向后行驶（横向居中），直到 back <= 90mm */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 90);
         break;
-      case 10:  /* 向右行驶 + back 纵向居中(70mm)，直到 right <= 9.5cm (95mm) */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 95);
+      case 10:  /* 向右行驶 + back 纵向居中(75mm)，直到 right <= 80mm */
+        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 80);
         break;
-      case 11:  /* 向前行驶（横向居中），直到 front <= 5cm (70mm) */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 70);
+      case 11:  /* 向前行驶（横向居中），直到 front <= 62mm */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 62);
         break;
-      case 12:  /* 向左行驶 4m + 前侧激光纵向居中（纵向 PID，目标 70mm） */
+      case 12:  /* 向左行驶 4200mm + 前侧激光纵向居中（纵向 PID，目标 40mm） */
         ZDT_Chassis_Drive_LongCenter(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, 4200.0f);
         break;
 
@@ -231,7 +234,7 @@ void StartChassis_Task(void *argument)
 
     /* 停下后等待 700ms */
     osDelay(700);
-    state++;
+    g_state++;
   }
   /* USER CODE END StartChassis_Task */
 }
@@ -286,6 +289,9 @@ void StartData_Task(void *argument)
 
     LCD_DisplayString(10, 180, "Y:");
     LCD_DisplayNumber(70, 180, g_coord_y, 5);
+
+    LCD_DisplayString(10, 210, "State:");
+    LCD_DisplayNumber(70, 210, g_state, 3);
 
     osDelay(20);   /* 20ms = 50Hz */
   }

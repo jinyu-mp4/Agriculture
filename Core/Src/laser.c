@@ -5,7 +5,7 @@
   *
   *          串口协议（ASCII，115200 8N1）：
   *            <0x20> 距离(mm) <0x2C> <0x20> 置信度 <0x0A>
-  *          有效距离 20~4000mm，置信度 0~100，超范围视为无效。
+  *          有效距离 20~5000mm，接收 0~100 的全部置信度。
   *
   *          接收方式：USART1/USART2/USART3 单字节中断接收，在
   *          HAL_UART_RxCpltCallback 里逐字节拼帧，不占用任务时间片。
@@ -15,8 +15,8 @@
 #include "laser.h"
 
 #define LASER_DIST_MIN   20     /* 最小有效距离(mm) */
-#define LASER_DIST_MAX   4000   /* 最大有效距离(mm) */
-#define LASER_CONF_MAX   255    /* 置信度上限：实测 0~100，放宽到 255 全范围 */
+#define LASER_DIST_MAX   5000   /* MINIF 协议的理论最大距离(mm) */
+#define LASER_CONF_MAX   100    /* 协议字段上限，允许低置信度读数 */
 
 /* 每个激光模块的接收/解析状态 */
 typedef struct
@@ -27,7 +27,8 @@ typedef struct
     /* 解析状态机：0 等帧头空格 / 1 距离数字 / 2 等逗号后的空格 / 3 置信度数字 */
     uint8_t  state;
     uint16_t dist;             /* 正在累积的距离 */
-    uint8_t  conf;             /* 正在累积的置信度 */
+    uint16_t conf;             /* 正在累积的置信度，校验前最多三位 */
+    uint8_t  conf_digits;      /* 已收到的置信度位数 */
 
     /* 最新有效结果 */
     volatile uint16_t distance_mm;
@@ -57,6 +58,7 @@ static void laser_parse(LaserDev *d, uint8_t b)
                 d->state = 1;
                 d->dist  = 0;
                 d->conf  = 0;
+                d->conf_digits = 0;
             }
             break;
 
@@ -98,20 +100,18 @@ static void laser_parse(LaserDev *d, uint8_t b)
             {
                 d->frame_count++;
                 if (d->dist >= LASER_DIST_MIN && d->dist <= LASER_DIST_MAX &&
-                    d->conf <= LASER_CONF_MAX)
+                    d->conf_digits > 0 && d->conf <= LASER_CONF_MAX)
                 {
                     d->distance_mm = d->dist;
-                    d->confidence  = d->conf;
+                    d->confidence  = (uint8_t)d->conf;
                     d->valid       = true;
                 }
                 d->state = 0;
             }
-            else if (b >= '0' && b <= '9')
+            else if (b >= '0' && b <= '9' && d->conf_digits < 3)
             {
-                if (d->conf < 200)
-                {
-                    d->conf = (uint8_t)(d->conf * 10 + (b - '0'));
-                }
+                d->conf = (uint16_t)(d->conf * 10 + (b - '0'));
+                d->conf_digits++;
             }
             else
             {
