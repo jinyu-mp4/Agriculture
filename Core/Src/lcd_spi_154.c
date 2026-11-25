@@ -299,7 +299,7 @@ void SPI_LCD_Init(void)
 	LCD_CS_H;	// Ƭѡ����		
 
 // ���½���һЩ������Ĭ������
-   LCD_SetDirection(Direction_V);  	      //	������ʾ����
+   LCD_SetDirection(Direction_V_Flip);  	      //	������ʾ����
 	LCD_SetBackColor(LCD_BLACK);           // ���ñ���ɫ
    LCD_SetColor(LCD_WHITE);               // ���û���ɫ  
 	LCD_Clear();                           // ����

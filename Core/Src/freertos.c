@@ -44,6 +44,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define IMU_LOOP_MS              10U
+#define CHASSIS_FAST_RPM         200   /* case 0/1 快速段 */
+#define CHASSIS_SLOW_RPM         75    /* 后续遍历段 */
 
 /* 塔台捡拾控制参数 */
 #define TOWER_TRIGGER_Y_ERR    50     /* |err_y| <= 50 触发塔台作业 */
@@ -216,40 +218,40 @@ void StartChassis_Task(void *argument)
     switch (g_state)
     {
       case 0:   /* 向右，直到 right<80 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, c_right_le80_back_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_RIGHT, CHASSIS_FAST_RPM, c_right_le80_back_ge200, 2);
         break;
       case 1:   /* 向后，直到 back<80 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80, 1);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le80, 1);
         break;
       case 2:   /* 向左，直到 right>775 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge775_front_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge775_front_ge200, 2);
         break;
       case 3:   /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2);
         break;
       case 4:   /* 向左，直到 right>1455 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge1455_back_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge1455_back_ge200, 2);
         break;
       case 5:   /* 向后，直到 back<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge200, 2);
         break;
       case 6:   /* 向左，直到 right>2130 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge2130_front_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2130_front_ge200, 2);
         break;
       case 7:   /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2);
         break;
       case 8:   /* 向左，直到 right>2900 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge2900_back_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2900_back_ge200, 2);
         break;
       case 9:   /* 向后，直到 back<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge200, 2);
         break;
       case 10:  /* 向左，直到 right>3540 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge3540_front_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge3540_front_ge200, 2);
         break;
       case 11:  /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2);
         break;
 
       default:  /* 状态12：全部完成，停车待机 */

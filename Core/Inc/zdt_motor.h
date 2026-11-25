@@ -81,7 +81,7 @@ extern "C" {
 #define ZDT_LAT_RANGE_MAX_MM         (400)
 
 /** 横向居中目标墙距(mm)：误差 = 目标值 - 实测右侧距离。按实车摆正后标定 */
-#define ZDT_LAT_TARGET_MM            (80.0f)   /* 原 52.5mm，离墙太近易跌破激光 20mm 下限，加大余量 */
+#define ZDT_LAT_TARGET_MM            (83.0f)   /* 横向居中目标墙距(mm) */
 
 /** 横向 PID 增益：误差单位 mm，输出为横移修正转速(RPM)。
  *  Kp = 每 1mm 横向误差产生的修正转速。 */
@@ -103,15 +103,15 @@ extern "C" {
 /** 纵向墙距有效范围(mm)：只有前/后侧激光读数在此范围内才认为“前方/后方有田垄/围栏”
  *  可做纵向修正；低于下限或高于上限视为该方向无墙，前后修正清零、开环平移。 */
 #define ZDT_LON_RANGE_MIN_MM         (20)
-#define ZDT_LON_RANGE_MAX_MM         (400)
+#define ZDT_LON_RANGE_MAX_MM         (100)
 
 /** 纵向保持目标墙距(mm)，前侧激光专用（state 0/4/8/12）：
  *  误差 = 目标值 - 实测前侧距离。按实车摆正后标定 */
-#define ZDT_LON_TARGET_MM            (40)
+#define ZDT_LON_TARGET_MM            (30)
 
 /** 纵向保持目标墙距(mm)，后侧激光专用：用 back 作参考坐标时以该值为目标。
  *  前/后侧激光安装位置不一致，所以两者单独标定。 */
-#define ZDT_LON_TARGET_BACK_MM       (75)
+#define ZDT_LON_TARGET_BACK_MM       (30)
 
 /** 纵向 PID 增益：误差单位 mm，输出为前后修正转速(RPM)。 */
 #define ZDT_LON_KP                   (1.0f)
@@ -123,6 +123,24 @@ extern "C" {
 
 /** 纵向修正方向取反开关：若实测“越修越偏”，把 0 改成 1 */
 #define ZDT_LON_DIR_INVERT           (0)
+
+/* —— 航向角闭环（陀螺仪 → 角度环，内环高频）—— */
+
+/** 角度环比例增益：小 P 大致纠偏即可，避免轮子抖动 */
+#define ZDT_YAW_KP                   (0.3f)
+#define ZDT_YAW_KI                   (0.0f)
+#define ZDT_YAW_KD                   (0.0f)
+/** 角度修正转速限幅(RPM) */
+#define ZDT_YAW_MAX_RPM              (40)
+/** 航向修正方向取反开关：若航向越修越偏，把 0 改成 1 */
+#define ZDT_YAW_DIR_INVERT           (0)
+
+/* —— 提前减速（接近停止点时降到爬行速度，停得更准）—— */
+
+/** 爬行速度(RPM)：接近停止阈值时降到该值 */
+#define ZDT_CREEP_RPM                (75)
+/** 距离停止阈值还有多远(mm)时开始减速 */
+#define ZDT_CREEP_RANGE_MM           (150)
 /** 多机同步下发时相邻两条电机命令的间隔(ms)。间隔太短可能出现“粘包”
  *  （电机把两帧当一帧）；示例工程用 10ms，这里取 2ms 已足够。 */
 #define ZDT_SYNC_CMD_GAP_MS          (2)
