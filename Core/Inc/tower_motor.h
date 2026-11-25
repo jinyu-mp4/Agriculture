@@ -33,11 +33,11 @@ extern "C" {
 
 /** 三个电机各自的移动速度(RPM)，按实测标定 */
 #define TOWER_TURNTABLE_SPEED      (33)    /* 转台（地址5） */
-#define TOWER_ARM_SPEED            (75)    /* 作业臂前后（地址6） */
+#define TOWER_ARM_SPEED            (100)   /* 作业臂前后（地址6） */
 #define TOWER_LIFT_SPEED           (200)   /* 升降（地址7） */
 
 /** 默认加速度档位 0~255，0 表示不用曲线加减速、直接启动 */
-#define TOWER_DEFAULT_ACC          (0)
+#define TOWER_DEFAULT_ACC          (100)
 
 /** 位置模式运动模式：2 = 相对当前位置做相对运动（多次下发不累积误差） */
 #define TOWER_MOTION_MODE          (2)

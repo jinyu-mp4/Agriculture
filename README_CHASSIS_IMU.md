@@ -10,7 +10,7 @@
 | 底盘速度和加速度 | [Core/Inc/zdt_motor.h](Core/Inc/zdt_motor.h) 的 `ZDT_DEFAULT_SPEED_RPM`、`ZDT_DEFAULT_ACC` |
 | YAW 左右方向 | [Core/Src/icm42688.c](Core/Src/icm42688.c) 的 `ICM42688_YAW_SIGN`，Z 轴向上时车头右转 1° 应显示约 `1.0°`，左转 1° 应显示约 `359.0°` |
 
-塔台仍可在后续遍历段触发。底盘确认停车后，塔台接管 UART5，完成后底盘继续当前路段。作业臂前后轴（地址 6）速度为 `75 RPM`。
+塔台仍可在后续遍历段触发。底盘确认停车后，塔台接管 UART5，完成后底盘继续当前路段。作业臂前后轴（地址 6）速度为 `100 RPM`。
 
 ## 陀螺仪显示与故障诊断
 

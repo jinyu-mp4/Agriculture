@@ -44,8 +44,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define IMU_LOOP_MS              10U
-#define CHASSIS_FAST_RPM         200   /* case 0/1 快速段 */
-#define CHASSIS_SLOW_RPM         75    /* 后续遍历段 */
+#define CHASSIS_FAST_RPM         ZDT_FAST_SPEED_RPM  /* case 0/1 快速段 */
+#define CHASSIS_SLOW_RPM         100   /* 后续遍历段 */
 
 /* 塔台捡拾控制参数 */
 #define TOWER_TRIGGER_Y_ERR    50     /* |err_y| <= 50 触发塔台作业 */
@@ -59,7 +59,7 @@
 #define TOWER_LIFT_PULSES_PER_MM  164.95f   /* 实测：3200 脉冲下降 19.4mm */
 #define TOWER_LIFT_DOWN_MM        79.0f     /* 下降高度(mm)，自由改这里 */
 #define TOWER_LIFT_DOWN_PULSES    ((int32_t)(TOWER_LIFT_DOWN_MM * TOWER_LIFT_PULSES_PER_MM))
-#define TOWER_LIFT_WAIT_MS     3000   /* 下降后停留 3s */
+#define TOWER_LIFT_TRAVEL_MS   3000   /* 升降 79mm，200 RPM、加速度 100 档的到位等待 */
 #define TOWER_POST_DELAY_MS    2000   /* 作业完成后恢复底盘前的等待 */
 /* USER CODE END PD */
 
@@ -218,40 +218,40 @@ void StartChassis_Task(void *argument)
     switch (g_state)
     {
       case 0:   /* 向右，直到 right<80 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_RIGHT, CHASSIS_FAST_RPM, c_right_le80_back_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_RIGHT, CHASSIS_FAST_RPM, c_right_le80_back_ge200, 2, LASER_FRONT, 80);
         break;
       case 1:   /* 向后，直到 back<80 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le80, 1);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le80, 1, LASER_RIGHT, 80);
         break;
       case 2:   /* 向左，直到 right>775 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge775_front_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge775_front_ge200, 2, LASER_BACK, 80);
         break;
       case 3:   /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50);
         break;
       case 4:   /* 向左，直到 right>1455 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge1455_back_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge1455_back_ge200, 2, LASER_FRONT, 80);
         break;
       case 5:   /* 向后，直到 back<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge200, 2, LASER_RIGHT, 50);
         break;
       case 6:   /* 向左，直到 right>2130 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2130_front_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2130_front_ge200, 2, LASER_BACK, 80);
         break;
       case 7:   /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50);
         break;
       case 8:   /* 向左，直到 right>2900 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2900_back_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2900_back_ge200, 2, LASER_FRONT, 80);
         break;
       case 9:   /* 向后，直到 back<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge200, 2, LASER_RIGHT, 50);
         break;
       case 10:  /* 向左，直到 right>3540 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge3540_front_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge3540_front_ge200, 2, LASER_BACK, 80);
         break;
       case 11:  /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50);
         break;
 
       default:  /* 状态12：全部完成，停车待机 */
@@ -463,7 +463,7 @@ void StartTask03(void *argument)
     /* 4. 电机 7 下降 79mm -> 停1s -> 夹爪闭合 -> 等1s */
     TowerMotor_Move(TOWER_LIFT, -TOWER_LIFT_DOWN_PULSES);
     off_7 -= TOWER_LIFT_DOWN_PULSES;
-    osDelay(1500);          /* 等下降到位 */
+    osDelay(TOWER_LIFT_TRAVEL_MS);
     osDelay(1000);          /* 停 1s */
     Claw_Close();
     osDelay(1000);          /* 等 1s */
@@ -471,7 +471,7 @@ void StartTask03(void *argument)
     /* 5. 电机 7 复位 -> 复位后等 1s */
     TowerMotor_Move(TOWER_LIFT, -off_7);
     off_7 = 0;
-    osDelay(1500);          /* 等电机7复位到位 */
+    osDelay(TOWER_LIFT_TRAVEL_MS);
     osDelay(1000);          /* 复位后等 1s */
 
     /* 6. 电机 5 移到「初始位置向左 3700 脉冲」处 */

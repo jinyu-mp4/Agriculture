@@ -56,6 +56,10 @@ extern "C" {
  *  12V 供电时建议用 100 让转速缓慢爬升，避免瞬间堵转触发保护 */
 #define ZDT_DEFAULT_ACC              (100)
 
+/** 快速巡航转速及进入、退出该转速时使用的加减速档位。 */
+#define ZDT_FAST_SPEED_RPM           (300)
+#define ZDT_FAST_ACC                 (150)
+
 /** 串口发送超时时间(ms) */
 #define ZDT_UART_TIMEOUT_MS          (50)
 
@@ -138,9 +142,9 @@ extern "C" {
 /* —— 提前减速（接近停止点时降到爬行速度，停得更准）—— */
 
 /** 爬行速度(RPM)：接近停止阈值时降到该值 */
-#define ZDT_CREEP_RPM                (75)
-/** 距离停止阈值还有多远(mm)时开始减速 */
-#define ZDT_CREEP_RANGE_MM           (150)
+#define ZDT_CREEP_RPM                (100)
+/** 主激光距停车阈值还有多远(mm)时开始减速 */
+#define ZDT_CREEP_RANGE_MM           (750U)
 /** 多机同步下发时相邻两条电机命令的间隔(ms)。间隔太短可能出现“粘包”
  *  （电机把两帧当一帧）；示例工程用 10ms，这里取 2ms 已足够。 */
 #define ZDT_SYNC_CMD_GAP_MS          (2)
@@ -208,13 +212,13 @@ bool ZDT_Chassis_Rotate(float angle_deg);
  *  需调用 ZDT_Chassis_Stop() 停止。 */
 bool ZDT_Chassis_Rotate_Speed(int16_t rpm);
 
-/** 开环行驶（无 PID 居中）：向 dir 方向以 base_rpm 连续行驶，
- *  直到 conds 里所有条件（各激光距离均在指定区间内）都满足才停车。
- *  conds 为 NULL 或 cond_num=0 时，表示无条件、一直走不停（调用方负责停止）。
- *  塔台接管 UART5 期间暂停，作业完成后继续当前路段。
- *  阻塞式。 */
+/** 闭环行驶：向 dir 方向以 base_rpm 连续行驶，
+ *  内环用陀螺仪角度 PID，外环用 corr_laser 激光做位置 PID（目标 corr_target_mm），
+ *  conds[0] 为减速用的主激光条件，所有条件都满足才停车。
+ *  塔台接管 UART5 期间暂停，作业完成后继续当前路段。阻塞式。 */
 bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
-                       const ZDT_AuxCond *conds, int cond_num);
+                       const ZDT_AuxCond *conds, int cond_num,
+                       LaserID corr_laser, uint16_t corr_target_mm);
 
 /** 前后直行 + 右侧激光横向居中（闭环）：向 dir 方向以 base_rpm 连续行驶，
  *  每个控制周期读右侧激光做横向 PID（目标 ZDT_LAT_TARGET_MM，有效范围 20~400mm），

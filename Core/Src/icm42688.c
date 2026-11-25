@@ -18,12 +18,10 @@
 #define ICM42688_CALIBRATION_MS       1000U
 #define ICM42688_CALIBRATION_STEP_MS  10U
 #define ICM42688_FRESH_MS             80U
-#define ICM42688_FILTER_TAU_S         0.045f
 #define ICM42688_YAW_SIGN             (-1.0f) /* Z 轴向上时，顺时针为车身右转 */
 
 static uint16_t s_address;
 static float s_bias_dps;
-static float s_filtered_dps;
 static volatile float s_yaw_deg;
 static volatile uint32_t s_sample_ms;
 static volatile ICM42688_Status s_status = ICM42688_STARTING;
@@ -187,7 +185,6 @@ bool ICM42688_CalibrateYaw(void)
     }
 
     s_bias_dps = bias;
-    s_filtered_dps = 0.0f;
     s_yaw_deg = 0.0f;
     s_sample_ms = last_ms;
     s_status = ICM42688_READY;
@@ -211,12 +208,10 @@ void ICM42688_UpdateYaw(void)
 
     float dt = (float)elapsed_ms * 0.001f;
     float rate = (raw - s_bias_dps) * ICM42688_YAW_SIGN;
-    float filtered = s_filtered_dps + dt / (ICM42688_FILTER_TAU_S + dt) * (rate - s_filtered_dps);
-    float yaw = s_yaw_deg + 0.5f * (s_filtered_dps + filtered) * dt;
+    float yaw = s_yaw_deg + rate * dt;   /* 直接积分，不滤波 */
     if (yaw < 0.0f) yaw += 360.0f;
     if (yaw >= 360.0f) yaw -= 360.0f;
 
-    s_filtered_dps = filtered;
     s_yaw_deg = yaw;
     s_sample_ms = now_ms;
 }
