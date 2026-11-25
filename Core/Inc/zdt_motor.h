@@ -57,8 +57,8 @@ extern "C" {
 #define ZDT_DEFAULT_ACC              (100)
 
 /** 快速巡航转速及进入、退出该转速时使用的加减速档位。 */
-#define ZDT_FAST_SPEED_RPM           (300)
-#define ZDT_FAST_ACC                 (150)
+#define ZDT_FAST_SPEED_RPM           (200)
+#define ZDT_FAST_ACC                 (200)
 
 /** 串口发送超时时间(ms) */
 #define ZDT_UART_TIMEOUT_MS          (50)
@@ -72,7 +72,7 @@ extern "C" {
 
 /** 旋转方向取反开关：若航向校正越修越偏（说明原地旋转方向反了），
  *  把 0 改成 1 即可，无需改动方向表。 */
-#define ZDT_ROTATE_DIR_INVERT        (0)
+#define ZDT_ROTATE_DIR_INVERT        (1)
 
 /* —— 激光横向居中 PID（右侧激光 → 麦轮横移分量，用于前后直行贴墙居中）—— */
 
@@ -130,8 +130,10 @@ extern "C" {
 
 /* —— 航向角闭环（陀螺仪 → 角度环，内环高频）—— */
 
+/** 上电校准后的前方，整个路线保持该航向，单位度。 */
+#define ZDT_YAW_TARGET_DEG           (0.0f)
 /** 角度环比例增益：小 P 大致纠偏即可，避免轮子抖动 */
-#define ZDT_YAW_KP                   (0.3f)
+#define ZDT_YAW_KP                   (1.0f)
 #define ZDT_YAW_KI                   (0.0f)
 #define ZDT_YAW_KD                   (0.0f)
 /** 角度修正转速限幅(RPM) */
@@ -142,7 +144,7 @@ extern "C" {
 /* —— 提前减速（接近停止点时降到爬行速度，停得更准）—— */
 
 /** 爬行速度(RPM)：接近停止阈值时降到该值 */
-#define ZDT_CREEP_RPM                (100)
+#define ZDT_CREEP_RPM                (50)
 /** 主激光距停车阈值还有多远(mm)时开始减速 */
 #define ZDT_CREEP_RANGE_MM           (750U)
 /** 多机同步下发时相邻两条电机命令的间隔(ms)。间隔太短可能出现“粘包”

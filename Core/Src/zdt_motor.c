@@ -63,12 +63,12 @@ static const int8_t s_dir_table[4][MOTOR_NUM] =
     /* 右移 */ { +1,  -1,  +1,  -1 },
 };
 
-/* 原地旋转：四轮同向自转。行 = 0顺时针 / 1逆时针(俯视)，列 = 电机 */
+/* 原地旋转，与实测的前后、左右平移系数正交。列按电机地址 1~4 排列。
+ * 由现有侧移表推定后排地址的物理左右对调，顺时针方向需架空核对。 */
 static const int8_t s_rot_table[2][MOTOR_NUM] =
 {
-    /*          LF   RF   LR   RR */
-    /* 顺时针 */ { +1, +1, +1, +1 },
-    /* 逆时针 */ { -1, -1, -1, -1 },
+    /* 顺时针 */ { -1, +1, +1, -1 },
+    /* 逆时针 */ { +1, -1, -1, +1 },
 };
 
 /* ============================================================================
@@ -368,12 +368,15 @@ bool ZDT_Chassis_Rotate(float angle_deg)
 bool ZDT_Chassis_Rotate_Speed(int16_t rpm)
 {
     bool ok = true;
+    int32_t requested_rpm = rpm;
 
-    if (ZDT_ROTATE_DIR_INVERT) rpm = (int16_t)-rpm;
+    if (ZDT_ROTATE_DIR_INVERT) requested_rpm = -requested_rpm;
 
     for (int i = 0; i < MOTOR_NUM; i++)
     {
-        if (!ZDT_Motor_Speed((ZDT_MotorID)i, rpm)) ok = false;
+        int32_t wheel_rpm = requested_rpm * s_rot_table[0][i];
+        if (wheel_rpm > INT16_MAX) wheel_rpm = INT16_MAX;
+        if (!ZDT_Motor_Speed((ZDT_MotorID)i, (int16_t)wheel_rpm)) ok = false;
     }
 
     return ok;
@@ -398,7 +401,6 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
                        const ZDT_AuxCond *conds, int cond_num,
                        LaserID corr_laser, uint16_t corr_target_mm)
 {
-    float    heading_target = 0.0f;
     uint32_t t_last;
     bool     was_cruising_fast = false;
     uint32_t fast_decel_started_ms = 0;
@@ -424,9 +426,6 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
     }
     PID_Reset(&s_corr_pid);
     s_pos_phase = 0;
-
-    /* 目标航向始终为 0（上电校准后的前方），姿态保持不动 */
-    heading_target = 0.0f;
 
     t_last = osKernelGetTickCount();
 
@@ -460,20 +459,23 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
         if (dt <= 0.0f) dt = 0.001f;
         t_last = now;
 
-        /* 内环：航向角 PID（高频，每循环一次，~10ms） */
-        float rot_rpm = 0.0f;
+        /* 内环保持上电 0°，正修正量对应俯视顺时针。 */
+        int16_t rot_rpm = 0;
         float yaw;
         if (ICM42688_GetYaw(&yaw))
         {
-            float err = yaw - heading_target;
+            float err = ZDT_YAW_TARGET_DEG - yaw;
             if (err > 180.0f)  err -= 360.0f;   /* 最短角归一化到 -180~180 */
             if (err < -180.0f) err += 360.0f;
-            rot_rpm = PID_Compute_Error(&s_yaw_pid, err, dt);
-            if (ZDT_YAW_DIR_INVERT) rot_rpm = -rot_rpm;
+            float correction = PID_Compute_Error(&s_yaw_pid, err, dt);
+            if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
+            /* 先把旋转修正取整，再叠加到四轮，使修正量保持对称。 */
+            rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
         }
 
-        /* 外环：位置 PID（只用 corr_laser 纠偏），低频，每 ~33ms 更新 */
+        /* 外环：位置 PID —— 暂时注释掉 */
         float corr_rpm = 0.0f;
+#if 0
         if (++s_pos_phase >= 3)
         {
             s_pos_phase = 0;
@@ -499,6 +501,7 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
                 }
             }
         }
+#endif
 
         /* 第一项是减速用的主激光，电机按 acc 平滑降到爬行速度。 */
         int16_t cruise = base_rpm;
@@ -519,7 +522,7 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
         {
             float v = (float)cruise * (float)s_dir_table[dir][i]
                     + corr_rpm * (float)s_dir_table[corr_dir][i]
-                    - rot_rpm * (float)s_rot_table[0][i];
+                    + rot_rpm * (float)s_rot_table[0][i];
             if (v >  3000.0f) v =  3000.0f;
             if (v < -3000.0f) v = -3000.0f;
             rpm[i] = (int16_t)v;
