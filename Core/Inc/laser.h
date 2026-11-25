@@ -64,9 +64,6 @@ uint8_t Laser_GetConfidence(LaserID id);
 /** 是否已收到过至少一帧有效数据 */
 bool Laser_IsValid(LaserID id);
 
-/** 读取控制用距离，只有最近 200ms 内收到有效帧才返回 true。 */
-bool Laser_GetFreshDistance(LaserID id, uint16_t *distance_mm);
-
 /** 已接收字节数（诊断用） */
 uint32_t Laser_GetRxCount(LaserID id);
 

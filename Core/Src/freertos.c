@@ -28,48 +28,21 @@
 #include "icm42688.h"
 #include "laser.h"
 #include "zdt_motor.h"
-#include "pid.h"
 #include "tower_motor.h"
 #include "jetson_coord.h"
 #include "claw.h"
 #include "lcd_spi_154.h"
 #include "lcd_fonts.h"
-#include <math.h>
 #include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct
-{
-  ZDT_MoveDir direction;
-  uint16_t cruise_rpm;
-  ZDT_AuxCond stop;
-  ZDT_AuxCond clearance;
-  uint16_t position_target_mm;
-} ChassisLeg;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define START_BUTTON_ACTIVE      GPIO_PIN_RESET /* PC1 按钮另一端接 GND */
-#define START_BUTTON_DEBOUNCE_MS 30U
-#define START_DELAY_MS           3000U
-#define CHASSIS_FAST_RPM         200U
-#define CHASSIS_WORK_RPM         75U
-#define CHASSIS_BRAKE_LEAD_MM    250U
-#define CHASSIS_BRAKE_RPM_PER_S  400.0f
-#define CHASSIS_YAW_LOOP_MS      20U
-#define CHASSIS_POS_LOOP_MS      40U
-#define CHASSIS_YAW_KP           0.8f
-#define CHASSIS_YAW_KI           0.0f
-#define CHASSIS_YAW_KD           0.06f
-#define CHASSIS_YAW_MAX_RPM      10.0f
-#define CHASSIS_YAW_DEADBAND_DEG 0.8f
-#define CHASSIS_POS_MAX_RPM      20.0f
-#define CHASSIS_POS_DEADBAND_MM  4.0f
-#define CHASSIS_POS_MAX_ERROR_MM 200.0f
 #define IMU_LOOP_MS              10U
 
 /* 塔台捡拾控制参数 */
@@ -95,24 +68,6 @@ typedef struct
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-/* 前后的停车主条件用各自的激光，侧移统一看右激光。 */
-static const ChassisLeg s_route[] = {
-  /* case 0–1：快速到达第一条垄，提前减到作业速度。 */
-  {MOVE_RIGHT,    CHASSIS_FAST_RPM, {LASER_RIGHT,    0, 80}, {LASER_BACK,  200, 0}, ZDT_LON_TARGET_MM},
-  {MOVE_BACKWARD, CHASSIS_FAST_RPM, {LASER_BACK,     0, 80}, {0},                  ZDT_LAT_TARGET_MM},
-  /* case 2–11：逐垄往返。沿垄行驶时保持对应垄的右侧激光距离。 */
-  {MOVE_LEFT,     CHASSIS_WORK_RPM, {LASER_RIGHT,  775,  0}, {LASER_FRONT, 200, 0}, 0},
-  {MOVE_FORWARD,  CHASSIS_WORK_RPM, {LASER_FRONT,    0, 80}, {LASER_RIGHT, 200, 0}, 775},
-  {MOVE_LEFT,     CHASSIS_WORK_RPM, {LASER_RIGHT, 1455,  0}, {LASER_BACK,  200, 0}, 0},
-  {MOVE_BACKWARD, CHASSIS_WORK_RPM, {LASER_BACK,     0, 80}, {LASER_RIGHT, 200, 0}, 1455},
-  {MOVE_LEFT,     CHASSIS_WORK_RPM, {LASER_RIGHT, 2130,  0}, {LASER_FRONT, 200, 0}, 0},
-  {MOVE_FORWARD,  CHASSIS_WORK_RPM, {LASER_FRONT,    0, 80}, {LASER_RIGHT, 200, 0}, 2130},
-  {MOVE_LEFT,     CHASSIS_WORK_RPM, {LASER_RIGHT, 2900,  0}, {LASER_BACK,  200, 0}, 0},
-  {MOVE_BACKWARD, CHASSIS_WORK_RPM, {LASER_BACK,     0, 80}, {LASER_RIGHT, 200, 0}, 2900},
-  {MOVE_LEFT,     CHASSIS_WORK_RPM, {LASER_RIGHT, 3540,  0}, {LASER_FRONT, 200, 0}, 0},
-  {MOVE_FORWARD,  CHASSIS_WORK_RPM, {LASER_FRONT,    0, 80}, {LASER_RIGHT, 200, 0}, 3540},
-};
-
 static const osThreadAttr_t s_imu_task_attributes = {
   .name = "IMU_Task",
   .stack_size = 512 * 4,
@@ -134,7 +89,7 @@ volatile bool     g_coord_valid;
 
 /* 两个任务通过请求和停车确认交接 UART5。 */
 volatile bool     g_tower_working = false;
-static volatile bool s_chassis_parked;
+volatile bool     g_chassis_parked = false;
 static volatile bool s_route_active;
 
 /* 底盘状态机当前状态号（Chassis_Task 写，Data_Task 只读显示） */
@@ -146,7 +101,7 @@ osThreadId_t Chassis_TaskHandle;
 const osThreadAttr_t Chassis_Task_attributes = {
   .name = "Chassis_Task",
   .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityHigh1,
+  .priority = (osPriority_t) osPriorityBelowNormal1,
 };
 /* Definitions for Data_Task */
 osThreadId_t Data_TaskHandle;
@@ -166,8 +121,6 @@ const osThreadAttr_t Tower_Task_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 static void StartImuTask(void *argument);
-static void chassis_wait_start_button(void);
-static bool chassis_drive_leg(const ChassisLeg *leg);
 /* USER CODE END FunctionPrototypes */
 
 void StartChassis_Task(void *argument);
@@ -232,29 +185,85 @@ void MX_FREERTOS_Init(void) {
 void StartChassis_Task(void *argument)
 {
   /* USER CODE BEGIN StartChassis_Task */
-  float yaw;
+  g_state = 0;
+
+  /* 上电初始化：电机、激光 */
   ZDT_Motor_Init();
   Laser_Init();
-  chassis_wait_start_button();
-  osDelay(START_DELAY_MS);
-  while (!ICM42688_GetYaw(&yaw)) osDelay(IMU_LOOP_MS);
 
+  /* 上电后等待 5s：待激光测距稳定后再开始走 */
+  osDelay(5000);
   s_route_active = true;
-  for (g_state = 0; g_state < (int32_t)(sizeof(s_route) / sizeof(s_route[0])); g_state++)
-  {
-    if (!chassis_drive_leg(&s_route[g_state]))
-    {
-      g_state = -1;
-      break;
-    }
-    osDelay(700);
-  }
 
-  s_route_active = false;
+  /* 各状态的停止条件：所有激光距离都在指定区间内才切换 */
+  static const ZDT_AuxCond c_right_le80_back_ge200[2]     = { {LASER_RIGHT, 0, 80},   {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_back_le80[1]                = { {LASER_BACK, 0, 80} };
+  static const ZDT_AuxCond c_right_ge775_front_ge200[2]  = { {LASER_RIGHT, 775, 0},  {LASER_FRONT, 200, 0} };
+  static const ZDT_AuxCond c_front_le80_right_ge200[2]   = { {LASER_FRONT, 0, 80},   {LASER_RIGHT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge1455_back_ge200[2]  = { {LASER_RIGHT, 1455, 0}, {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_back_le80_right_ge200[2]    = { {LASER_BACK, 0, 80},    {LASER_RIGHT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge2130_front_ge200[2] = { {LASER_RIGHT, 2130, 0}, {LASER_FRONT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge2900_back_ge200[2]  = { {LASER_RIGHT, 2900, 0}, {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_right_ge3540_front_ge200[2] = { {LASER_RIGHT, 3540, 0}, {LASER_FRONT, 200, 0} };
+
   for (;;)
   {
-    ZDT_Chassis_Stop();
-    osDelay(1000);
+    bool moved;
+    switch (g_state)
+    {
+      case 0:   /* 向右，直到 right<80 且 back>200 */
+        moved = ZDT_Chassis_Drive(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, c_right_le80_back_ge200, 2);
+        break;
+      case 1:   /* 向后，直到 back<80 */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80, 1);
+        break;
+      case 2:   /* 向左，直到 right>775 且 front>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge775_front_ge200, 2);
+        break;
+      case 3:   /* 向前，直到 front<80 且 right>200 */
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
+        break;
+      case 4:   /* 向左，直到 right>1455 且 back>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge1455_back_ge200, 2);
+        break;
+      case 5:   /* 向后，直到 back<80 且 right>200 */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80_right_ge200, 2);
+        break;
+      case 6:   /* 向左，直到 right>2130 且 front>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge2130_front_ge200, 2);
+        break;
+      case 7:   /* 向前，直到 front<80 且 right>200 */
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
+        break;
+      case 8:   /* 向左，直到 right>2900 且 back>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge2900_back_ge200, 2);
+        break;
+      case 9:   /* 向后，直到 back<80 且 right>200 */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80_right_ge200, 2);
+        break;
+      case 10:  /* 向左，直到 right>3540 且 front>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge3540_front_ge200, 2);
+        break;
+      case 11:  /* 向前，直到 front<80 且 right>200 */
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
+        break;
+
+      default:  /* 状态12：全部完成，停车待机 */
+        s_route_active = false;
+        ZDT_Chassis_Stop();
+        osDelay(1000);
+        continue;
+    }
+
+    if (!moved)
+    {
+      g_state = -1;
+      continue;
+    }
+
+    /* 停下后等待 700ms */
+    osDelay(700);
+    g_state++;
   }
   /* USER CODE END StartChassis_Task */
 }
@@ -381,7 +390,7 @@ void StartTask03(void *argument)
 
     /* 先让底盘停车并交出 UART5，再发塔台动作指令。 */
     g_tower_working = true;
-    while (s_route_active && !s_chassis_parked) osDelay(5);
+    while (s_route_active && !g_chassis_parked) osDelay(5);
     if (!s_route_active)
     {
       g_tower_working = false;
@@ -504,150 +513,9 @@ static void StartImuTask(void *argument)
       }
     }
 
-    /* 行驶中失联时先等底盘退出路线，停车后再重建航向零点。 */
+    /* 行驶中失联时保留上电零点，路线结束后再重新校准。 */
     while (s_route_active) osDelay(IMU_LOOP_MS);
     osDelay(250);
-  }
-}
-
-static void chassis_wait_start_button(void)
-{
-  /* 先确认按钮已释放，随后等待稳定的按下沿。 */
-  uint32_t released_since = osKernelGetTickCount();
-  do
-  {
-    if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) == START_BUTTON_ACTIVE)
-      released_since = osKernelGetTickCount();
-    osDelay(5);
-  } while (osKernelGetTickCount() - released_since < START_BUTTON_DEBOUNCE_MS);
-
-  for (;;)
-  {
-    while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) != START_BUTTON_ACTIVE) osDelay(5);
-    uint32_t pressed_since = osKernelGetTickCount();
-    do
-    {
-      osDelay(5);
-      if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) != START_BUTTON_ACTIVE) break;
-      if (osKernelGetTickCount() - pressed_since >= START_BUTTON_DEBOUNCE_MS) return;
-    } while (true);
-  }
-}
-
-static bool chassis_clearance_met(const ZDT_AuxCond *clearance)
-{
-  uint16_t distance;
-  if (clearance->min_mm == 0 && clearance->max_mm == 0) return true;
-
-  return Laser_GetFreshDistance(clearance->laser, &distance) &&
-         distance >= clearance->min_mm &&
-         (clearance->max_mm == 0 || distance <= clearance->max_mm);
-}
-
-static float chassis_position_rpm(const ChassisLeg *leg, bool longitudinal, PID_t *pid, float dt)
-{
-  uint16_t distance;
-  LaserID laser = longitudinal ? LASER_RIGHT : LASER_FRONT;
-  if (leg->position_target_mm != 0 && Laser_GetFreshDistance(laser, &distance))
-  {
-    /* 正误差表示离目标太远。向前或向右移动会缩短对应激光距离。 */
-    float error = (float)distance - leg->position_target_mm;
-    if (fabsf(error) > CHASSIS_POS_DEADBAND_MM && fabsf(error) <= CHASSIS_POS_MAX_ERROR_MM)
-    {
-      float rpm = PID_Compute_Error(pid, error, dt);
-      bool invert = longitudinal ? ZDT_LAT_DIR_INVERT : ZDT_LON_DIR_INVERT;
-      return invert ? -rpm : rpm;
-    }
-  }
-
-  PID_Reset(pid);
-  return 0.0f;
-}
-
-static bool chassis_drive_leg(const ChassisLeg *leg)
-{
-  bool longitudinal = leg->direction == MOVE_FORWARD || leg->direction == MOVE_BACKWARD;
-  float direction = (leg->direction == MOVE_FORWARD || leg->direction == MOVE_RIGHT) ? 1.0f : -1.0f;
-  float base_rpm = leg->cruise_rpm;
-  float position_rpm = 0.0f;
-  bool started = false;
-  bool braking = false;
-  uint32_t next_tick = osKernelGetTickCount();
-  uint32_t last_yaw_tick = next_tick - CHASSIS_YAW_LOOP_MS;
-  uint32_t last_position_tick = next_tick - CHASSIS_POS_LOOP_MS;
-  PID_t yaw_pid;
-  PID_t position_pid;
-
-  PID_Init(&yaw_pid, CHASSIS_YAW_KP, CHASSIS_YAW_KI, CHASSIS_YAW_KD,
-           -CHASSIS_YAW_MAX_RPM, CHASSIS_YAW_MAX_RPM);
-  PID_Init(&position_pid,
-           longitudinal ? ZDT_LAT_KP : ZDT_LON_KP,
-           longitudinal ? ZDT_LAT_KI : ZDT_LON_KI,
-           longitudinal ? ZDT_LAT_KD : ZDT_LON_KD,
-           -CHASSIS_POS_MAX_RPM, CHASSIS_POS_MAX_RPM);
-  if (position_pid.ki > 0.0f)
-  {
-    float limit = CHASSIS_POS_MAX_RPM / position_pid.ki;
-    PID_SetIntLimit(&position_pid, -limit, limit);
-  }
-
-  for (;;)
-  {
-    if (g_tower_working)
-    {
-      if (!ZDT_Chassis_Stop()) return false;
-      s_chassis_parked = true;
-      while (g_tower_working) osDelay(5);
-      s_chassis_parked = false;
-      PID_Reset(&yaw_pid);
-      PID_Reset(&position_pid);
-      started = false;
-      next_tick = osKernelGetTickCount();
-      last_yaw_tick = next_tick - CHASSIS_YAW_LOOP_MS;
-      last_position_tick = next_tick - CHASSIS_POS_LOOP_MS;
-    }
-
-    float yaw;
-    uint16_t distance;
-    if (!ICM42688_GetYaw(&yaw) || !Laser_GetFreshDistance(leg->stop.laser, &distance)) return false;
-
-    int remaining_mm = leg->stop.max_mm != 0 ? (int)distance - leg->stop.max_mm
-                                               : (int)leg->stop.min_mm - distance;
-    if (remaining_mm <= 0 && chassis_clearance_met(&leg->clearance)) return ZDT_Chassis_Stop();
-
-    uint32_t now = osKernelGetTickCount();
-    float yaw_dt = (float)(now - last_yaw_tick) * 0.001f;
-    last_yaw_tick = now;
-
-    if (leg->cruise_rpm > CHASSIS_WORK_RPM && remaining_mm <= (int)CHASSIS_BRAKE_LEAD_MM)
-      braking = true;
-    if (braking)
-    {
-      base_rpm = started ? fmaxf(CHASSIS_WORK_RPM, base_rpm - CHASSIS_BRAKE_RPM_PER_S * yaw_dt)
-                         : CHASSIS_WORK_RPM;
-    }
-
-    if (now - last_position_tick >= CHASSIS_POS_LOOP_MS)
-    {
-      float dt = (float)(now - last_position_tick) * 0.001f;
-      position_rpm = chassis_position_rpm(leg, longitudinal, &position_pid, dt);
-      last_position_tick = now;
-    }
-
-    /* 所有路段只平移。取回到上电零向的最短角度，兼容跨 359°/0°。 */
-    float yaw_error = yaw > 180.0f ? 360.0f - yaw : -yaw;
-    float outside_deadband = fmaxf(0.0f, fabsf(yaw_error) - CHASSIS_YAW_DEADBAND_DEG);
-    yaw_error = copysignf(outside_deadband, yaw_error);
-    if (!started) yaw_pid.prev_error = yaw_error;
-    float yaw_rpm = PID_Compute_Error(&yaw_pid, yaw_error, yaw_dt);
-
-    float forward = longitudinal ? direction * base_rpm : position_rpm;
-    float right = longitudinal ? position_rpm : direction * base_rpm;
-    if (!ZDT_Chassis_SetVelocity(forward, right, yaw_rpm)) return false;
-    started = true;
-
-    next_tick += CHASSIS_YAW_LOOP_MS;
-    if (osDelayUntil(next_tick) != osOK) next_tick = osKernelGetTickCount();
   }
 }
 /* USER CODE END Application */
