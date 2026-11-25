@@ -16,7 +16,8 @@
 
 #define LASER_DIST_MIN   20     /* 最小有效距离(mm) */
 #define LASER_DIST_MAX   5000   /* MINIF 协议的理论最大距离(mm) */
-#define LASER_CONF_MAX   100    /* 协议字段上限，允许低置信度读数 */
+#define LASER_CONF_MAX   100    /* 协议字段上限 */
+#define LASER_CONF_MIN   50     /* 置信度下限：低于此值的帧视为不可靠，丢弃 */
 
 /* 每个激光模块的接收/解析状态 */
 typedef struct
@@ -100,7 +101,8 @@ static void laser_parse(LaserDev *d, uint8_t b)
             {
                 d->frame_count++;
                 if (d->dist >= LASER_DIST_MIN && d->dist <= LASER_DIST_MAX &&
-                    d->conf_digits > 0 && d->conf <= LASER_CONF_MAX)
+                    d->conf_digits > 0 && d->conf <= LASER_CONF_MAX &&
+                    d->conf >= LASER_CONF_MIN)
                 {
                     d->distance_mm = d->dist;
                     d->confidence  = (uint8_t)d->conf;

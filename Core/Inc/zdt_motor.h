@@ -50,7 +50,7 @@ extern "C" {
 
 /** 默认速度(RPM)，范围 0~3000（手册 0x0BB8=3000）。
  *  注意：12V 供电时先降到 200 左右，换 24V 后可调回 500 甚至更高 */
-#define ZDT_DEFAULT_SPEED_RPM        (100)
+#define ZDT_DEFAULT_SPEED_RPM        (50)
 
 /** 默认加速度档位 0~255，0 表示不用曲线加减速、直接启动（启动冲击电流最大）。
  *  12V 供电时建议用 100 让转速缓慢爬升，避免瞬间堵转触发保护 */
@@ -81,12 +81,12 @@ extern "C" {
 #define ZDT_LAT_RANGE_MAX_MM         (400)
 
 /** 横向居中目标墙距(mm)：误差 = 目标值 - 实测右侧距离。按实车摆正后标定 */
-#define ZDT_LAT_TARGET_MM            (52.5f)   /* 原 45mm，按实测再 +7.5mm */
+#define ZDT_LAT_TARGET_MM            (80.0f)   /* 原 52.5mm，离墙太近易跌破激光 20mm 下限，加大余量 */
 
 /** 横向 PID 增益：误差单位 mm，输出为横移修正转速(RPM)。
  *  Kp = 每 1mm 横向误差产生的修正转速。 */
 #define ZDT_LAT_KP                   (1.0f)
-#define ZDT_LAT_KI                   (0.0f)
+#define ZDT_LAT_KI                   (0.1f)   /* 加积分消除稳态偏移，0.1~0.2 可调 */
 #define ZDT_LAT_KD                   (0.0f)
 
 /** 横移修正转速限幅(RPM)：避免修正过大导致整车横向打摆 */

@@ -438,13 +438,11 @@ bool ZDT_Chassis_Drive_LaserCenter(ZDT_MoveDir dir, int16_t base_rpm,
 
     for (;;)
     {
-        /* 指定激光触发则停车（until_le 决定 <= 或 >= 阈值） */
+        /* 指定激光触发则停车（until_le 决定 <= 或 >= 阈值），带 N 次去抖 */
         uint16_t d_stop = Laser_GetDistance(stop_laser);
-        if (Laser_IsValid(stop_laser) &&
-            (until_le ? (d_stop <= stop_mm) : (d_stop >= stop_mm)))
-        {
-            break;
-        }
+        bool stop_ok = Laser_IsValid(stop_laser) &&
+                       (until_le ? (d_stop <= stop_mm) : (d_stop >= stop_mm));
+        if (stop_ok) break;
 
         uint32_t now = osKernelGetTickCount();
         float    dt  = (float)(now - t_last) / 1000.0f;
@@ -600,12 +598,10 @@ bool ZDT_Chassis_Drive_LatCenter(ZDT_MoveDir dir, int16_t base_rpm,
 
     for (;;)
     {
-        /* 右侧激光触发则停车 */
+        /* 右侧激光触发则停车，带 N 次去抖 */
         uint16_t d_stop = Laser_GetDistance(LASER_RIGHT);
-        if (Laser_IsValid(LASER_RIGHT) && d_stop <= stop_mm)
-        {
-            break;
-        }
+        bool stop_ok = Laser_IsValid(LASER_RIGHT) && d_stop <= stop_mm;
+        if (stop_ok) break;
 
         uint32_t now = osKernelGetTickCount();
         float    dt  = (float)(now - t_last) / 1000.0f;

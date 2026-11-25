@@ -186,14 +186,14 @@ void StartChassis_Task(void *argument)
   {
     switch (g_state)
     {
-      case 0:   /* 向右行驶 + front 纵向居中(40mm)，直到 right <= 3500mm */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 3500);
+      case 0:   /* 向右行驶 + front 纵向居中(40mm)，直到 right <= 3540mm */
+        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 3540);
         break;
-      case 1:   /* 向后行驶（横向居中），直到 back <= 105mm */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 105);
+      case 1:   /* 向后行驶（横向居中），直到 back <= 80mm */
+        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 80);
         break;
-      case 2:   /* 向右行驶 + back 纵向居中(75mm)，直到 right <= 2850mm */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 2850);
+      case 2:   /* 向右行驶 + back 纵向居中(75mm)，直到 right <= 2900mm */
+        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 2900);
         break;
       case 3:   /* 向前行驶（横向居中），直到 front <= 62mm */
         ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 62);
