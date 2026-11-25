@@ -191,8 +191,12 @@ void StartChassis_Task(void *argument)
   ZDT_Motor_Init();
   Laser_Init();
 
-  /* 上电后等待 5s：待激光测距稳定后再开始走 */
-  osDelay(5000);
+  /* 上电后等待按下 PC1 按键才开始行驶（PC1 另一端接 GND，低电平有效） */
+  while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) != GPIO_PIN_RESET)
+  {
+    osDelay(20);
+  }
+  osDelay(3000);
   s_route_active = true;
 
   /* 各状态的停止条件：所有激光距离都在指定区间内才切换 */
