@@ -6,7 +6,9 @@
   *          通过 USART6 发送固定指令控制夹爪开合（串口总线舵机协议）。
   *            打开：#000P660T0500!
   *            闭合：#000P1000T0500!
-  *          只发不收。
+  *
+  *          发送只发不收；另提供单字节中断接收，用于抓取夹爪回传的反馈帧，
+  *          便于在屏幕上观察夹爪是否有应答、应答内容是否正常（故障检测）。
   ******************************************************************************
   */
 #ifndef __CLAW_H
@@ -29,6 +31,24 @@ void Claw_Open(void);
 
 /** 夹爪闭合 */
 void Claw_Close(void);
+
+/** 初始化：为 USART6 启动单字节中断接收（用于抓夹爪回传，诊断故障）。 */
+void Claw_Init(void);
+
+/** 由 HAL_UART_RxCpltCallback 转发调用（每收到 1 字节调用一次，内部自动重新武装） */
+void Claw_FeedByte(UART_HandleTypeDef *huart);
+
+/** 由 HAL_UART_ErrorCallback 转发调用（串口出错后恢复接收） */
+void Claw_UART_Error(UART_HandleTypeDef *huart);
+
+/** 已接收字节数（诊断用） */
+uint32_t Claw_GetRxCount(void);
+
+/** 已拼出的完整反馈帧数（诊断用） */
+uint32_t Claw_GetFrameCount(void);
+
+/** 最近一帧夹爪反馈文本（ASCII，以 '!' 或换行结尾）。尚未收到时返回空串 ""。 */
+const char *Claw_GetLastReply(void);
 
 #ifdef __cplusplus
 }

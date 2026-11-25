@@ -172,8 +172,12 @@ bool Coord_GetPoint(CoordPoint *pt)
 {
     if (pt == NULL || !s_coord.valid) return false;
 
-    pt->x = s_coord.coord_x;
-    pt->y = s_coord.coord_y;
+    do
+    {
+        pt->frame = s_coord.frame_count;
+        pt->x = s_coord.coord_x;
+        pt->y = s_coord.coord_y;
+    } while (pt->frame != s_coord.frame_count);
     return true;
 }
 
