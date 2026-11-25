@@ -18,6 +18,7 @@
 #define LASER_DIST_MAX   5000   /* MINIF 协议的理论最大距离(mm) */
 #define LASER_CONF_MAX   100    /* 协议字段上限 */
 #define LASER_CONF_MIN   50     /* 置信度下限：低于此值的帧视为不可靠，丢弃 */
+#define LASER_FRESH_MS   200U   /* 约 6 个 30 Hz 测距周期 */
 
 /* 每个激光模块的接收/解析状态 */
 typedef struct
@@ -34,6 +35,7 @@ typedef struct
     /* 最新有效结果 */
     volatile uint16_t distance_mm;
     volatile uint8_t  confidence;
+    volatile uint32_t last_valid_ms;
     volatile bool     valid;
 
     /* 诊断计数 */
@@ -106,6 +108,7 @@ static void laser_parse(LaserDev *d, uint8_t b)
                 {
                     d->distance_mm = d->dist;
                     d->confidence  = (uint8_t)d->conf;
+                    d->last_valid_ms = HAL_GetTick();
                     d->valid       = true;
                 }
                 d->state = 0;
@@ -178,6 +181,17 @@ bool Laser_IsValid(LaserID id)
 {
     if (id >= LASER_NUM) return false;
     return s_laser[id].valid;
+}
+
+bool Laser_GetFreshDistance(LaserID id, uint16_t *distance_mm)
+{
+    if (id >= LASER_NUM || !s_laser[id].valid) return false;
+
+    uint32_t last_valid_ms = s_laser[id].last_valid_ms;
+    if (HAL_GetTick() - last_valid_ms > LASER_FRESH_MS) return false;
+
+    *distance_mm = s_laser[id].distance_mm;
+    return true;
 }
 
 uint32_t Laser_GetRxCount(LaserID id)

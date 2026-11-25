@@ -58,13 +58,9 @@ static const int8_t s_dir_table[4][MOTOR_NUM] =
     /* 右移 */ { +1,  -1,  +1,  -1 },
 };
 
-/* 原地旋转：四轮同向自转。行 = 0顺时针 / 1逆时针(俯视)，列 = 电机 */
-static const int8_t s_rot_table[2][MOTOR_NUM] =
-{
-    /*          LF   RF   LR   RR */
-    /* 顺时针 */ { +1, +1, +1, +1 },
-    /* 逆时针 */ { -1, -1, -1, -1 },
-};
+/* 按现有平移表推定后排地址与物理左右互换。俯视顺时针，顺序为地址 1~4。
+ * 该向量与前进、右侧移向量正交。实际轴序在架车时核对。 */
+static const int8_t s_clockwise[MOTOR_NUM] = { -1, +1, +1, -1 };
 
 /* ============================================================================
  *                            底层收发
@@ -342,7 +338,6 @@ bool ZDT_Chassis_Rotate(float angle_deg)
 {
     int32_t  net[MOTOR_NUM];
     uint32_t pulses;
-    int      row;
 
     /* 旋转方向取反开关（实车方向反了改宏即可） */
     if (ZDT_ROTATE_DIR_INVERT) angle_deg = -angle_deg;
@@ -350,11 +345,11 @@ bool ZDT_Chassis_Rotate(float angle_deg)
     pulses = zdt_angle_to_pulses(angle_deg);
     if (pulses == 0) return false;
 
-    row = (angle_deg > 0.0f) ? 0 : 1;   /* 0 顺时针 / 1 逆时针 */
+    int sign = angle_deg > 0.0f ? 1 : -1;
 
     for (int i = 0; i < MOTOR_NUM; i++)
     {
-        net[i] = (int32_t)s_rot_table[row][i] * (int32_t)pulses;
+        net[i] = sign * s_clockwise[i] * (int32_t)pulses;
     }
 
     return zdt_chassis_pos_synced(net, ZDT_DEFAULT_SPEED_RPM, ZDT_DEFAULT_ACC);
@@ -362,16 +357,25 @@ bool ZDT_Chassis_Rotate(float angle_deg)
 
 bool ZDT_Chassis_Rotate_Speed(int16_t rpm)
 {
-    bool ok = true;
+    return ZDT_Chassis_SetVelocity(0.0f, 0.0f, (float)rpm);
+}
 
-    if (ZDT_ROTATE_DIR_INVERT) rpm = (int16_t)-rpm;
+bool ZDT_Chassis_SetVelocity(float forward_rpm, float right_rpm, float clockwise_rpm)
+{
+    int16_t rpm[MOTOR_NUM];
+    if (ZDT_ROTATE_DIR_INVERT) clockwise_rpm = -clockwise_rpm;
 
     for (int i = 0; i < MOTOR_NUM; i++)
     {
-        if (!ZDT_Motor_Speed((ZDT_MotorID)i, rpm)) ok = false;
+        float wheel = forward_rpm * s_dir_table[MOVE_FORWARD][i]
+                    + right_rpm * s_dir_table[MOVE_RIGHT][i]
+                    + clockwise_rpm * s_clockwise[i];
+        if (wheel > 3000.0f) wheel = 3000.0f;
+        if (wheel < -3000.0f) wheel = -3000.0f;
+        rpm[i] = (int16_t)(wheel + (wheel >= 0.0f ? 0.5f : -0.5f));
     }
 
-    return ok;
+    return zdt_chassis_speed_synced(rpm);
 }
 
 bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,

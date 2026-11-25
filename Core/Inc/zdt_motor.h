@@ -190,6 +190,9 @@ bool ZDT_Chassis_Rotate(float angle_deg);
  *  需调用 ZDT_Chassis_Stop() 停止。 */
 bool ZDT_Chassis_Rotate_Speed(int16_t rpm);
 
+/** 合成前进、右侧移和顺时针转动分量（RPM），四轮用默认加速度同步变速。 */
+bool ZDT_Chassis_SetVelocity(float forward_rpm, float right_rpm, float clockwise_rpm);
+
 /** 开环行驶（无 PID 居中）：向 dir 方向以 base_rpm 连续行驶，
  *  直到 conds 里所有条件（各激光距离均在指定区间内）都满足才停车。
  *  conds 为 NULL 或 cond_num=0 时，表示无条件、一直走不停（调用方负责停止）。

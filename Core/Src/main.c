@@ -20,6 +20,7 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "dma.h"
+#include "i2c.h"
 #include "spi.h"
 #include "usart.h"
 #include "gpio.h"
@@ -100,6 +101,7 @@ int main(void)
   MX_SPI3_Init();
   MX_UART4_Init();
   MX_USART6_UART_Init();
+  MX_I2C3_Init();
   /* USER CODE BEGIN 2 */
   SPI_LCD_Init();	  /* 初始化液晶屏 */
   Coord_Init();         /* 启动 UART4 单字节接收：上位机 Jetson 坐标 */
