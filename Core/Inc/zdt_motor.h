@@ -150,6 +150,15 @@ typedef enum
     MOVE_RIGHT,         /* 右移（麦轮横向平移） */
 } ZDT_MoveDir;
 
+/** 状态切换条件：要求某激光距离满足 [min_mm, max_mm] 区间。
+ *  min_mm = 0 表示无下限，max_mm = 0 表示无上限。 */
+typedef struct
+{
+    LaserID  laser;
+    uint16_t min_mm;
+    uint16_t max_mm;
+} ZDT_AuxCond;
+
 /* ============================================================================
  *                            接口函数
  * ========================================================================== */
@@ -180,6 +189,13 @@ bool ZDT_Chassis_Rotate(float angle_deg);
 /** 整车原地旋转（速度模式，连续转动）：rpm > 0 顺时针(俯视)，< 0 逆时针。
  *  需调用 ZDT_Chassis_Stop() 停止。 */
 bool ZDT_Chassis_Rotate_Speed(int16_t rpm);
+
+/** 开环行驶（无 PID 居中）：向 dir 方向以 base_rpm 连续行驶，
+ *  直到 conds 里所有条件（各激光距离均在指定区间内）都满足才停车。
+ *  conds 为 NULL 或 cond_num=0 时，表示无条件、一直走不停（调用方负责停止）。
+ *  阻塞式。 */
+bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
+                       const ZDT_AuxCond *conds, int cond_num);
 
 /** 前后直行 + 右侧激光横向居中（闭环）：向 dir 方向以 base_rpm 连续行驶，
  *  每个控制周期读右侧激光做横向 PID（目标 ZDT_LAT_TARGET_MM，有效范围 20~400mm），

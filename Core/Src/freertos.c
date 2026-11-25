@@ -182,51 +182,59 @@ void StartChassis_Task(void *argument)
   /* 上电后等待 5s：待激光测距稳定后再开始走 */
   osDelay(5000);
 
+  /* 各状态的停止条件：所有激光距离都在指定区间内才切换 */
+  static const ZDT_AuxCond c_right_le80_back_ge200[2]     = { {LASER_RIGHT, 0, 80},   {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_back_le80[1]                = { {LASER_BACK, 0, 80} };
+  static const ZDT_AuxCond c_right_ge775_front_ge200[2]  = { {LASER_RIGHT, 775, 0},  {LASER_FRONT, 200, 0} };
+  static const ZDT_AuxCond c_front_le80_right_ge200[2]   = { {LASER_FRONT, 0, 80},   {LASER_RIGHT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge1455_back_ge200[2]  = { {LASER_RIGHT, 1455, 0}, {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_back_le80_right_ge200[2]    = { {LASER_BACK, 0, 80},    {LASER_RIGHT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge2130_front_ge200[2] = { {LASER_RIGHT, 2130, 0}, {LASER_FRONT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge2900_back_ge200[2]  = { {LASER_RIGHT, 2900, 0}, {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_right_ge3540_front_ge200[2] = { {LASER_RIGHT, 3540, 0}, {LASER_FRONT, 200, 0} };
+
   for (;;)
   {
     switch (g_state)
     {
-      case 0:   /* 向右行驶 + front 纵向居中(40mm)，直到 right <= 3540mm */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 3540);
+      case 0:   /* 向右，直到 right<80 且 back>200 */
+        ZDT_Chassis_Drive(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, c_right_le80_back_ge200, 2);
         break;
-      case 1:   /* 向后行驶（横向居中），直到 back <= 80mm */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 80);
+      case 1:   /* 向后，直到 back<80 */
+        ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80, 1);
         break;
-      case 2:   /* 向右行驶 + back 纵向居中(75mm)，直到 right <= 2900mm */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 2900);
+      case 2:   /* 向左，直到 right>775 且 front>200 */
+        ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge775_front_ge200, 2);
         break;
-      case 3:   /* 向前行驶（横向居中），直到 front <= 62mm */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 62);
+      case 3:   /* 向前，直到 front<80 且 right>200 */
+        ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
         break;
-      case 4:   /* 向右行驶 + front 纵向居中(40mm)，直到 right <= 2130mm */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 2130);
+      case 4:   /* 向左，直到 right>1455 且 back>200 */
+        ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge1455_back_ge200, 2);
         break;
-      case 5:   /* 向后行驶（横向居中），直到 back <= 74mm */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 74);
+      case 5:   /* 向后，直到 back<80 且 right>200 */
+        ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80_right_ge200, 2);
         break;
-      case 6:   /* 向右行驶 + back 纵向居中(75mm)，直到 right <= 1455mm */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 1455);
+      case 6:   /* 向左，直到 right>2130 且 front>200 */
+        ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge2130_front_ge200, 2);
         break;
-      case 7:   /* 向前行驶（横向居中），直到 front <= 62mm */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 62);
+      case 7:   /* 向前，直到 front<80 且 right>200 */
+        ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
         break;
-      case 8:   /* 向右行驶 + front 纵向居中(40mm)，直到 right <= 775mm */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, 775);
+      case 8:   /* 向左，直到 right>2900 且 back>200 */
+        ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge2900_back_ge200, 2);
         break;
-      case 9:   /* 向后行驶（横向居中），直到 back <= 90mm */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, true, 90);
+      case 9:   /* 向后，直到 back<80 且 right>200 */
+        ZDT_Chassis_Drive(MOVE_BACKWARD, ZDT_DEFAULT_SPEED_RPM, c_back_le80_right_ge200, 2);
         break;
-      case 10:  /* 向右行驶 + back 纵向居中(75mm)，直到 right <= 80mm */
-        ZDT_Chassis_Drive_LatCenter(MOVE_RIGHT, ZDT_DEFAULT_SPEED_RPM, LASER_BACK, 80);
+      case 10:  /* 向左，直到 right>3540 且 front>200 */
+        ZDT_Chassis_Drive(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, c_right_ge3540_front_ge200, 2);
         break;
-      case 11:  /* 向前行驶（横向居中），直到 front <= 62mm */
-        ZDT_Chassis_Drive_LaserCenter(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, LASER_FRONT, true, 62);
-        break;
-      case 12:  /* 向左行驶 4200mm + 前侧激光纵向居中（纵向 PID，目标 40mm） */
-        ZDT_Chassis_Drive_LongCenter(MOVE_LEFT, ZDT_DEFAULT_SPEED_RPM, 4200.0f);
+      case 11:  /* 向前，直到 front<80 且 right>200 */
+        ZDT_Chassis_Drive(MOVE_FORWARD, ZDT_DEFAULT_SPEED_RPM, c_front_le80_right_ge200, 2);
         break;
 
-      default:  /* 全部动作完成：停车待机 */
+      default:  /* 状态12：全部完成，停车待机 */
         ZDT_Chassis_Stop();
         osDelay(1000);
         continue;

@@ -374,6 +374,37 @@ bool ZDT_Chassis_Rotate_Speed(int16_t rpm)
     return ok;
 }
 
+bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
+                       const ZDT_AuxCond *conds, int cond_num)
+{
+    for (;;)
+    {
+        /* 检查所有条件是否满足（各激光距离均在其指定区间内） */
+        bool ok = true;
+        for (int i = 0; i < cond_num; i++)
+        {
+            uint16_t d = Laser_GetDistance(conds[i].laser);
+            if (!Laser_IsValid(conds[i].laser)) { ok = false; break; }
+            if (conds[i].min_mm != 0 && d < conds[i].min_mm) { ok = false; break; }
+            if (conds[i].max_mm != 0 && d > conds[i].max_mm) { ok = false; break; }
+        }
+        if (ok && cond_num > 0) break;
+
+        /* 开环行驶：按方向表下发四轮速度（无 PID 居中） */
+        int16_t rpm[MOTOR_NUM];
+        for (int i = 0; i < MOTOR_NUM; i++)
+        {
+            rpm[i] = (int16_t)((float)base_rpm * (float)s_dir_table[dir][i]);
+        }
+        zdt_chassis_speed_synced(rpm);
+
+        osDelay(ZDT_LAT_LOOP_MS);
+    }
+
+    ZDT_Chassis_Stop();
+    return true;
+}
+
 uint32_t ZDT_Move_Duration_Ms(float distance_mm)
 {
     float wheel_circ_mm;   /* 轮子周长(mm) */
