@@ -21,6 +21,7 @@
 #include "i2c.h"
 
 /* USER CODE BEGIN 0 */
+#include "cmsis_os.h"
 
 /* USER CODE END 0 */
 
@@ -120,6 +121,62 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 }
 
 /* USER CODE BEGIN 1 */
+I2C3_BusState I2C3_GetBusState(void)
+{
+  if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_RESET) return I2C3_BUS_SCL_LOW;
+  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_9) == GPIO_PIN_RESET) return I2C3_BUS_SDA_LOW;
+  if (__HAL_I2C_GET_FLAG(&hi2c3, I2C_FLAG_BUSY) != RESET) return I2C3_BUS_BUSY;
+  return I2C3_BUS_IDLE;
+}
 
+I2C3_BusState I2C3_RecoverBus(void)
+{
+  GPIO_InitTypeDef gpio = {0};
+
+  /* 释放硬件 I2C 的引脚，用开漏 GPIO 检查线路并尝试总线清除。 */
+  __HAL_I2C_DISABLE(&hi2c3);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_SET);
+  gpio.Mode = GPIO_MODE_OUTPUT_OD;
+  gpio.Pull = GPIO_PULLUP;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  gpio.Pin = GPIO_PIN_8;
+  HAL_GPIO_Init(GPIOA, &gpio);
+  gpio.Pin = GPIO_PIN_9;
+  HAL_GPIO_Init(GPIOC, &gpio);
+  osDelay(2);
+
+  if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_SET &&
+      HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_9) == GPIO_PIN_RESET)
+  {
+    for (unsigned pulse = 0; pulse < 9U; pulse++)
+    {
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+      osDelay(2);
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+      osDelay(2);
+      if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_RESET ||
+          HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_9) == GPIO_PIN_SET) break;
+    }
+
+    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_SET &&
+        HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_9) == GPIO_PIN_SET)
+    {
+      /* SDA 在 SCL 为高时释放，产生 STOP。 */
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_RESET);
+      osDelay(2);
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+      osDelay(2);
+      HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_SET);
+      osDelay(2);
+    }
+  }
+
+  /* HAL 重新应用复用引脚和时序，并复位 I2C3 控制器。 */
+  if (HAL_I2C_DeInit(&hi2c3) != HAL_OK || HAL_I2C_Init(&hi2c3) != HAL_OK)
+    return I2C3_BUS_ERROR;
+  return I2C3_GetBusState();
+}
 /* USER CODE END 1 */
 

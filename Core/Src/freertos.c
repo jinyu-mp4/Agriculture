@@ -272,7 +272,9 @@ void StartData_Task(void *argument)
   /* 显示和视觉坐标刷新由本任务处理，航向采样使用独立任务。 */
   static const char *const yaw_status_text[] = {
     [ICM42688_STARTING] = "INIT",
-    [ICM42688_BUS_ERROR] = "BUS",
+    [ICM42688_SCL_LOW] = "SCL0",
+    [ICM42688_SDA_LOW] = "SDA0",
+    [ICM42688_BUS_BUSY] = "BUSY",
     [ICM42688_NO_ACK] = "NACK",
     [ICM42688_ID_ERROR] = "ID",
     [ICM42688_CONFIG_ERROR] = "CFG",
@@ -333,7 +335,11 @@ void StartData_Task(void *argument)
     }
     else
     {
-      snprintf(yaw_text, sizeof(yaw_text), "%5s", yaw_status_text[ICM42688_GetStatus()]);
+      ICM42688_Status status = ICM42688_GetStatus();
+      if (status == ICM42688_BUS_ERROR)
+        snprintf(yaw_text, sizeof(yaw_text), "B%04X", (unsigned int)(ICM42688_GetBusError() & 0xFFFFU));
+      else
+        snprintf(yaw_text, sizeof(yaw_text), "%5s", yaw_status_text[status]);
     }
     LCD_DisplayString(116, 210, "YAW:");
     LCD_DisplayString(156, 210, yaw_text);

@@ -41,7 +41,18 @@ extern I2C_HandleTypeDef hi2c3;
 void MX_I2C3_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+typedef enum
+{
+  I2C3_BUS_IDLE,
+  I2C3_BUS_SCL_LOW,
+  I2C3_BUS_SDA_LOW,
+  I2C3_BUS_BUSY,
+  I2C3_BUS_ERROR,
+} I2C3_BusState;
 
+/* 由 I2C3 的使用任务在没有传输时调用。 */
+I2C3_BusState I2C3_GetBusState(void);
+I2C3_BusState I2C3_RecoverBus(void);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

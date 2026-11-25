@@ -27,6 +27,7 @@ static float s_filtered_dps;
 static volatile float s_yaw_deg;
 static volatile uint32_t s_sample_ms;
 static volatile ICM42688_Status s_status = ICM42688_STARTING;
+static volatile uint32_t s_bus_error;
 
 static bool icm_write(uint8_t reg, uint8_t value)
 {
@@ -44,6 +45,7 @@ static bool icm_find_address(void)
 {
     bool wrong_id = false;
     bool bus_error = false;
+    uint32_t hal_errors = 0U;
 
     for (uint16_t address = 0x69U; address >= 0x68U; address--)
     {
@@ -54,13 +56,35 @@ static bool icm_find_address(void)
             if (id == ICM42688_WHO_AM_I_VALUE) return true;
             wrong_id = true;
         }
-        else if (HAL_I2C_GetError(&hi2c3) != HAL_I2C_ERROR_AF)
+        else
         {
-            bus_error = true;
+            uint32_t error = HAL_I2C_GetError(&hi2c3);
+            if (error != HAL_I2C_ERROR_AF)
+            {
+                bus_error = true;
+                hal_errors |= error;
+            }
         }
     }
 
+    s_bus_error = hal_errors;
     s_status = wrong_id ? ICM42688_ID_ERROR : (bus_error ? ICM42688_BUS_ERROR : ICM42688_NO_ACK);
+    return false;
+}
+
+static bool icm_recover_and_probe(void)
+{
+    switch (I2C3_RecoverBus())
+    {
+        case I2C3_BUS_IDLE: return icm_find_address();
+        case I2C3_BUS_SCL_LOW: s_status = ICM42688_SCL_LOW; break;
+        case I2C3_BUS_SDA_LOW: s_status = ICM42688_SDA_LOW; break;
+        case I2C3_BUS_BUSY: s_status = ICM42688_BUS_BUSY; break;
+        case I2C3_BUS_ERROR:
+            s_bus_error = HAL_I2C_GetError(&hi2c3);
+            s_status = ICM42688_BUS_ERROR;
+            break;
+    }
     return false;
 }
 
@@ -68,9 +92,15 @@ bool ICM42688_Init(void)
 {
     uint8_t power;
     uint8_t gyro_config;
+    bool found = false;
 
     if (s_status == ICM42688_READY) s_status = ICM42688_STARTING;
-    if (!icm_find_address()) return false;
+    if (I2C3_GetBusState() == I2C3_BUS_IDLE)
+    {
+        found = icm_find_address();
+        if (!found && s_status != ICM42688_BUS_ERROR) return false;
+    }
+    if (!found && !icm_recover_and_probe()) return false;
 
     if (!icm_write(ICM42688_PWR_MGMT0, 0x00U))
     {
@@ -202,4 +232,9 @@ bool ICM42688_GetYaw(float *yaw_deg)
 ICM42688_Status ICM42688_GetStatus(void)
 {
     return s_status;
+}
+
+uint32_t ICM42688_GetBusError(void)
+{
+    return s_bus_error;
 }
