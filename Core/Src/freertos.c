@@ -46,7 +46,7 @@
 /* USER CODE BEGIN PD */
 #define IMU_LOOP_MS              10U
 #define CHASSIS_FAST_RPM         ZDT_FAST_SPEED_RPM  /* case 1 快速段 */
-#define CHASSIS_SLOW_RPM         100   /* 后续遍历段（前/后直行） */
+#define CHASSIS_SLOW_RPM         50    /* 后续遍历段（前/后直行） */
 #define CHASSIS_LEFT_RPM         70    /* 向左遍历段 */
 
 /* 塔台捡拾控制参数 */
@@ -66,6 +66,7 @@
 #define TOWER_LIFT_DOWN_MM        106.0f     /* 下降高度(mm)，自由改这里 */
 #define TOWER_LIFT_DOWN_PULSES    ((int32_t)(TOWER_LIFT_DOWN_MM * TOWER_LIFT_PULSES_PER_MM))
 #define TOWER_LIFT_TOP_SETTLE_MS  1000U     /* 提升后到转台动作的最短等待 */
+#define TOWER_PARK_WAIT_MS        2000U     /* 等底盘停车确认的最长时间 */
 
 /* 旧塔台流程参数（保留旧代码使用） */
 #define TOWER_CORR_MAX_ITER     30     /* 单轴纠偏最大循环次数 */
@@ -179,7 +180,7 @@ void MX_FREERTOS_Init(void) {
   Data_TaskHandle = osThreadNew(StartData_Task, NULL, &Data_Task_attributes);
 
   /* creation of Tower_Task */
-  // Tower_TaskHandle = osThreadNew(StartTask03, NULL, &Tower_Task_attributes);  /* 暂注释：只调底盘，禁用塔台任务 */
+  Tower_TaskHandle = osThreadNew(StartTask03, NULL, &Tower_Task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   osThreadNew(StartImuTask, NULL, &s_imu_task_attributes);
@@ -220,10 +221,11 @@ void StartChassis_Task(void *argument)
   static const ZDT_AuxCond c_back_le130[1]               = { {LASER_BACK, 0, 130} };
   static const ZDT_AuxCond c_right_ge100[1]              = { {LASER_RIGHT, 100, 0} };
   static const ZDT_AuxCond c_back_ge130[1]               = { {LASER_BACK, 130, 0} };
-  static const ZDT_AuxCond c_back_le70[1]                = { {LASER_BACK, 0, 70} };
-  static const ZDT_AuxCond c_back_ge70[1]                = { {LASER_BACK, 70, 0} };
+  static const ZDT_AuxCond c_back_ge80[1]                = { {LASER_BACK, 80, 0} };
+  static const ZDT_AuxCond c_back_le100[1]               = { {LASER_BACK, 0, 100} };
   static const ZDT_AuxCond c_right_ge770_front_ge200[2]  = { {LASER_RIGHT, 770, 0},  {LASER_FRONT, 200, 0} };
   static const ZDT_AuxCond c_front_le80[1]               = { {LASER_FRONT, 0, 80} };
+  static const ZDT_AuxCond c_front_le200[1]              = { {LASER_FRONT, 0, 200} };
   static const ZDT_AuxCond c_right_ge1433_back_ge200[2]  = { {LASER_RIGHT, 1433, 0}, {LASER_BACK, 200, 0} };
   static const ZDT_AuxCond c_back_le80[1]                = { {LASER_BACK, 0, 80} };
   static const ZDT_AuxCond c_right_ge2155_front_ge200[2] = { {LASER_RIGHT, 2155, 0}, {LASER_FRONT, 200, 0} };
@@ -236,7 +238,7 @@ void StartChassis_Task(void *argument)
     switch (g_state)
     {
       case 0:   /* 向后(right PID)、back<220 减速、back<130 停 → 调整 → 顺时针转 90° */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, 50, c_back_le130, 1, LASER_RIGHT, 80, 100, 50, 90, 10.0f);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, 80, c_back_le130, 1, LASER_RIGHT, 80, 100, 50, 90, 10.0f);
         if (moved)
         {
           /* 调整 1：right < 80 → 左移直到 right=100，稳定 300ms */
@@ -265,22 +267,35 @@ void StartChassis_Task(void *argument)
           if (moved) moved = ZDT_Chassis_Rotate_YawAbs(90.0f, 3.0f, 30);
         }
         break;
-      case 1:   /* 向后，back<=70 立即停 → 停 30ms → back<30 前移补位 → 停 30ms */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le70, 1, LASER_RIGHT, 80, 100, 0, 0, 10.0f);
+      case 1:   /* 向后，back<=100 停 → 停 30ms → back<20 前移补位到 back=80 → 停 30ms */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le100, 1, LASER_RIGHT, 80, 100, 0, 0, 10.0f);
         if (moved)
         {
           osDelay(30);   /* 停下后等待 30ms */
 
-          /* 调整：back < 30 → 前移直到 back >= 70，停，等 30ms */
-          if (Laser_IsValid(LASER_BACK) && Laser_GetDistance(LASER_BACK) < 30)
+          /* 调整：back < 20 → 前移直到 back >= 80，停 30ms */
+          if (Laser_IsValid(LASER_BACK) && Laser_GetDistance(LASER_BACK) < 20)
           {
-            moved = ZDT_Chassis_Drive(MOVE_FORWARD, 50, c_back_ge70, 1, LASER_NUM, 0, 0, 0, 0, 10.0f);
+            moved = ZDT_Chassis_Drive(MOVE_FORWARD, 50, c_back_ge80, 1, LASER_NUM, 0, 0, 0, 0, 10.0f);
             if (moved) osDelay(30);
           }
         }
         break;
-      case 2:   /* 向左，直到 right>770 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_LEFT_RPM, c_right_ge770_front_ge200, 2, LASER_BACK, 80, 0, 0, 0, 10.0f);
+      case 2:   /* 陀螺仪 90°(±3°) → 停 30ms → 向左到 front<200 → 2.1 减速向左到 right>=770 且 front>=200 */
+        moved = ZDT_Chassis_Rotate_YawAbs(90.0f, 3.0f, 0);
+        if (moved) osDelay(30);
+
+        /* 2.0：向左行驶直到 front<200 */
+        if (moved)
+        {
+          moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_LEFT_RPM, c_front_le200, 1, LASER_BACK, 80, 0, 0, 0, 10.0f);
+        }
+
+        /* 2.1：继续向左，减速，直到 right>=770 且 front>=200 */
+        if (moved)
+        {
+          moved = ZDT_Chassis_Drive(MOVE_LEFT, 40, c_right_ge770_front_ge200, 2, LASER_BACK, 80, 0, 0, 0, 10.0f);
+        }
         break;
       case 3:   /* 向前，直到 front<80 */
         moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80, 1, LASER_RIGHT, 50, 0, 0, 0, 10.0f);
@@ -451,6 +466,14 @@ void StartTask03(void *argument)
     }
 
     osDelay(100);
+
+    /* 请求底盘停车让出 UART5；等底盘确认（若底盘空闲无回应，超时后继续） */
+    g_tower_working = true;
+    uint32_t park_wait_start = osKernelGetTickCount();
+    while (!g_chassis_parked && (osKernelGetTickCount() - park_wait_start) < TOWER_PARK_WAIT_MS)
+    {
+      osDelay(5);
+    }
 
     if (!initialized)
     {
