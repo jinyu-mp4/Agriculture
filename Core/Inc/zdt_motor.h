@@ -218,6 +218,10 @@ bool ZDT_Chassis_Rotate_Speed(int16_t rpm);
  *  delta_deg 与 ICM42688 yaw 同坐标、符号与航向角 PID 一致；方向反了把调用处符号取反即可。 */
 bool ZDT_Chassis_Rotate_Yaw(float delta_deg);
 
+/** 整车原地旋转（陀螺仪 yaw 绝对航向闭环）：转到绝对航向 target_deg（单位度），
+ *  误差在 ±tol_deg 内保持 hold_ms 后停车。阻塞式。 */
+bool ZDT_Chassis_Rotate_YawAbs(float target_deg, float tol_deg, uint32_t hold_ms);
+
 /** 闭环行驶：向 dir 方向以 base_rpm 连续行驶，
  *  内环用陀螺仪角度 PID，外环用 corr_laser 激光做位置 PID（目标 corr_target_mm），
  *  conds[0] 为减速用的主激光条件，所有条件都满足才停车。

@@ -420,6 +420,60 @@ bool ZDT_Chassis_Rotate_Yaw(float delta_deg)
     return true;
 }
 
+/** 绝对航向旋转：原地转到绝对航向 target_deg（单位度），
+ *  误差在 ±tol_deg 内保持 hold_ms 后停车。阻塞式。 */
+bool ZDT_Chassis_Rotate_YawAbs(float target_deg, float tol_deg, uint32_t hold_ms)
+{
+    uint32_t t_last = osKernelGetTickCount();
+    uint32_t hold_start = 0;
+    bool     in_tol = false;
+
+    for (;;)
+    {
+        float yaw;
+        if (!ICM42688_GetYaw(&yaw)) { osDelay(10); continue; }
+
+        float err = target_deg - yaw;
+        if (err > 180.0f)  err -= 360.0f;
+        if (err < -180.0f) err += 360.0f;
+
+        if (err > -tol_deg && err < tol_deg)
+        {
+            if (!in_tol)
+            {
+                in_tol = true;
+                hold_start = osKernelGetTickCount();
+            }
+            else if (osKernelGetTickCount() - hold_start >= hold_ms)
+            {
+                break;   /* 在容差内保持 hold_ms，稳定后停车 */
+            }
+        }
+        else
+        {
+            in_tol = false;
+        }
+
+        uint32_t now = osKernelGetTickCount();
+        float    dt  = (float)(now - t_last) / 1000.0f;
+        if (dt <= 0.0f) dt = 0.001f;
+        t_last = now;
+
+        float correction = ZDT_YAW_KP * err;
+        if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
+        int16_t rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
+
+        int16_t rpm[MOTOR_NUM];
+        for (int i = 0; i < MOTOR_NUM; i++)
+            rpm[i] = (int16_t)(rot_rpm * s_rot_table[0][i]);
+        zdt_chassis_speed_synced(rpm, ZDT_DEFAULT_ACC);
+        osDelay(10);
+    }
+
+    ZDT_Chassis_Stop();
+    return true;
+}
+
 /* 航向角 PID 跨路段保留状态，位置 PID 随路段重新初始化。 */
 static PID_t s_yaw_pid;
 static bool  s_yaw_pid_inited;

@@ -45,9 +45,9 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define IMU_LOOP_MS              10U
-#define CHASSIS_FAST_RPM         ZDT_FAST_SPEED_RPM  /* case 0/1 快速段 */
+#define CHASSIS_FAST_RPM         ZDT_FAST_SPEED_RPM  /* case 1 快速段 */
 #define CHASSIS_SLOW_RPM         100   /* 后续遍历段（前/后直行） */
-#define CHASSIS_LEFT_RPM         80    /* 向左遍历段 */
+#define CHASSIS_LEFT_RPM         70    /* 向左遍历段 */
 
 /* 塔台捡拾控制参数 */
 #define TOWER_TRIGGER_Y_ERR    100     /* |err_y| <= 100 触发塔台作业 */
@@ -236,19 +236,19 @@ void StartChassis_Task(void *argument)
     switch (g_state)
     {
       case 0:   /* 向后(right PID)、back<220 减速、back<130 停 → 调整 → 顺时针转 90° */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le130, 1, LASER_RIGHT, 80, 100, 50, 90, 10.0f);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, 50, c_back_le130, 1, LASER_RIGHT, 80, 100, 50, 90, 10.0f);
         if (moved)
         {
-          /* 调整 1：right < 100 → 左移直到 right=100，稳定 300ms */
-          if (Laser_IsValid(LASER_RIGHT) && Laser_GetDistance(LASER_RIGHT) < 100)
+          /* 调整 1：right < 80 → 左移直到 right=100，稳定 300ms */
+          if (Laser_IsValid(LASER_RIGHT) && Laser_GetDistance(LASER_RIGHT) < 80)
           {
             moved = ZDT_Chassis_Drive(MOVE_LEFT, 50, c_right_ge100, 1, LASER_NUM, 0, 0, 0, 0, 10.0f);
             if (moved) osDelay(300);
           }
 
-          /* 调整 2：|yaw| > 10° → 旋转回 0°，稳定 30ms */
+          /* 调整 2：|yaw| > 5° → 旋转回 0°，稳定 30ms */
           float yaw;
-          if (moved && ICM42688_GetYaw(&yaw) && (yaw > 10.0f || yaw < -10.0f))
+          if (moved && ICM42688_GetYaw(&yaw) && (yaw > 5.0f || yaw < -5.0f))
           {
             moved = ZDT_Chassis_Rotate_Yaw(-yaw);
             if (moved) osDelay(30);
@@ -261,8 +261,8 @@ void StartChassis_Task(void *argument)
             if (moved) osDelay(30);
           }
 
-          /* 顺时针转 90°（若方向反了改 -90） */
-          if (moved) moved = ZDT_Chassis_Rotate_Yaw(90.0f);
+          /* 顺时针转到绝对航向 90°（误差≤3°，保持 30ms） */
+          if (moved) moved = ZDT_Chassis_Rotate_YawAbs(90.0f, 3.0f, 30);
         }
         break;
       case 1:   /* 向后，back<=70 立即停 → 停 30ms → back<30 前移补位 → 停 30ms */
