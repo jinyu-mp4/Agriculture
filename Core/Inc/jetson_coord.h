@@ -25,6 +25,8 @@ extern "C" {
 #include "main.h"
 #include "usart.h"
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdint.h>
 
 /* ============================================================================
  *                            类型定义
@@ -51,10 +53,13 @@ void Coord_FeedByte(UART_HandleTypeDef *huart);
 /** 由 HAL_UART_ErrorCallback 转发调用（串口出错后恢复接收） */
 void Coord_UART_Error(UART_HandleTypeDef *huart);
 
-/** 取最新坐标。成功返回 true 并写入 *pt；尚未收到有效帧时返回 false 且不改动 *pt。 */
+/** 取最新坐标。有有效坐标时返回 true 并写入 *pt，否则返回 false 且不改动 *pt。 */
 bool Coord_GetPoint(CoordPoint *pt);
 
-/** 是否已收到过至少一帧有效坐标 */
+/** 清零最新坐标并标记为无效。调用时须屏蔽 UART4 接收中断。 */
+void Coord_ClearPoint(void);
+
+/** 当前是否有有效坐标 */
 bool Coord_IsValid(void);
 
 /** 取最新坐标的 x（尚未收到有效帧时返回 0） */

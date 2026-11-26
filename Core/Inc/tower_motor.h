@@ -26,6 +26,7 @@ extern "C" {
 #include "main.h"
 #include "usart.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 /* ============================================================================
  *                    用户需要按实际修改的配置

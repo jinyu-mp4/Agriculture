@@ -181,6 +181,13 @@ bool Coord_GetPoint(CoordPoint *pt)
     return true;
 }
 
+void Coord_ClearPoint(void)
+{
+    s_coord.coord_x = 0;
+    s_coord.coord_y = 0;
+    s_coord.valid = false;
+}
+
 bool Coord_IsValid(void)
 {
     return s_coord.valid;

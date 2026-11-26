@@ -95,7 +95,7 @@ volatile bool     g_front_valid;
 volatile bool     g_right_valid;
 volatile bool     g_back_valid;
 
-/* 上位机 Jetson 传来的物块坐标（Data_Task 刷新，其他任务只读） */
+/* 上位机 Jetson 传来的物块坐标（Data_Task 刷新，Tower_Task 作业结束时清零） */
 volatile int32_t  g_coord_x;
 volatile int32_t  g_coord_y;
 volatile bool     g_coord_valid;
@@ -521,7 +521,15 @@ void StartTask03(void *argument)
       if (turntable_ms) osDelay(turntable_ms);
     }
 
-    /* 9. 恢复底盘，等下一次触发 */
+    /* 9. 回零等待结束后，清掉本轮的视觉坐标。 */
+    taskENTER_CRITICAL();
+    Coord_ClearPoint();
+    g_coord_x = 0;
+    g_coord_y = 0;
+    g_coord_valid = false;
+    taskEXIT_CRITICAL();
+
+    /* 恢复底盘，等下一次触发。 */
     g_tower_working = false;
     osDelay(TOWER_POST_DELAY_MS);
   }
