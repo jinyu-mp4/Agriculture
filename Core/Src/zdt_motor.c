@@ -426,23 +426,22 @@ static bool  s_yaw_pid_inited;
 static PID_t s_corr_pid;
 static uint32_t s_pos_phase = 0;   /* 位置环分频：每 3 个内环周期更新一次(~33ms) */
 
-static bool zdt_approaching_stop(const ZDT_AuxCond *primary)
+static bool zdt_approaching_stop(const ZDT_AuxCond *primary, uint16_t creep_range_mm)
 {
     if (!Laser_IsValid(primary->laser)) return false;
 
     uint32_t distance = Laser_GetDistance(primary->laser);
-    return (primary->max_mm != 0 && distance <= primary->max_mm + ZDT_CREEP_RANGE_MM) ||
-           (primary->min_mm != 0 && distance + ZDT_CREEP_RANGE_MM >= primary->min_mm);
+    return (primary->max_mm != 0 && distance <= primary->max_mm + creep_range_mm) ||
+           (primary->min_mm != 0 && distance + creep_range_mm >= primary->min_mm);
 }
 
 bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
                        const ZDT_AuxCond *conds, int cond_num,
-                       LaserID corr_laser, uint16_t corr_target_mm)
+                       LaserID corr_laser, uint16_t corr_target_mm,
+                       uint8_t acc, uint8_t creep_rpm, uint16_t creep_range_mm,
+                       float pid_kp)
 {
     uint32_t t_last;
-    bool     was_cruising_fast = false;
-    uint32_t fast_decel_started_ms = 0;
-    uint32_t fast_decel_ms = 0;
 
     if (!s_yaw_pid_inited)
     {
@@ -454,12 +453,12 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
     /* 位置环 PID：按本次纠偏激光（right=横向，front/back=纵向）选用对应增益 */
     if (corr_laser == LASER_RIGHT)
     {
-        PID_Init(&s_corr_pid, ZDT_LAT_KP, ZDT_LAT_KI, ZDT_LAT_KD,
+        PID_Init(&s_corr_pid, pid_kp, ZDT_LAT_KI, ZDT_LAT_KD,
                  -(float)ZDT_LAT_MAX_RPM, (float)ZDT_LAT_MAX_RPM);
     }
     else
     {
-        PID_Init(&s_corr_pid, ZDT_LON_KP, ZDT_LON_KI, ZDT_LON_KD,
+        PID_Init(&s_corr_pid, pid_kp, ZDT_LON_KI, ZDT_LON_KD,
                  -(float)ZDT_LON_MAX_RPM, (float)ZDT_LON_MAX_RPM);
     }
     PID_Reset(&s_corr_pid);
@@ -476,8 +475,6 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
             g_chassis_parked = true;
             while (g_tower_working) osDelay(5);
             g_chassis_parked = false;
-            was_cruising_fast = false;
-            fast_decel_ms = 0;
             t_last = osKernelGetTickCount();
         }
 
@@ -547,15 +544,10 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
             }
         }
 
-        /* 第一项是减速用的主激光，电机按 acc 平滑降到爬行速度。 */
+        /* 第一项是减速用的主激光：接近停车点时降到爬行速度（creep_rpm=0 表示不减速）。 */
         int16_t cruise = base_rpm;
-        if (cruise > ZDT_CREEP_RPM && cond_num > 0 && zdt_approaching_stop(&conds[0]))
-            cruise = ZDT_CREEP_RPM;
-
-        bool cruising_fast = cruise == ZDT_FAST_SPEED_RPM;
-        bool leaving_fast = was_cruising_fast && !cruising_fast;
-        uint8_t acc = (cruising_fast || leaving_fast || HAL_GetTick() - fast_decel_started_ms < fast_decel_ms)
-                      ? ZDT_FAST_ACC : ZDT_DEFAULT_ACC;
+        if (creep_rpm != 0 && cruise > creep_rpm && cond_num > 0 && zdt_approaching_stop(&conds[0], creep_range_mm))
+            cruise = creep_rpm;
 
         /* 位置修正方向：right → 左移，front/back → 后退 */
         ZDT_MoveDir corr_dir = (corr_laser == LASER_RIGHT) ? MOVE_LEFT : MOVE_BACKWARD;
@@ -571,18 +563,7 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
             if (v < -3000.0f) v = -3000.0f;
             rpm[i] = (int16_t)v;
         }
-        if (zdt_chassis_speed_synced(rpm, acc))
-        {
-            if (leaving_fast)
-            {
-                /* Emm 每 (256-acc)*50us 改变 1 RPM，估算时计入两端的轮速纠偏限幅。 */
-                uint32_t position_limit = corr_laser == LASER_RIGHT ? ZDT_LAT_MAX_RPM : ZDT_LON_MAX_RPM;
-                uint32_t max_drop_rpm = (ZDT_FAST_SPEED_RPM - cruise) + 2U * (ZDT_YAW_MAX_RPM + position_limit);
-                fast_decel_ms = (max_drop_rpm * (256U - ZDT_FAST_ACC) * 50U + 999U) / 1000U;
-                fast_decel_started_ms = HAL_GetTick();
-            }
-            was_cruising_fast = cruising_fast;
-        }
+        zdt_chassis_speed_synced(rpm, acc);
 
         osDelay(10);   /* 内环 10ms（角度环高频） */
     }

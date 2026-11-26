@@ -50,14 +50,14 @@ extern "C" {
 
 /** 默认速度(RPM)，范围 0~3000（手册 0x0BB8=3000）。
  *  注意：12V 供电时先降到 200 左右，换 24V 后可调回 500 甚至更高 */
-#define ZDT_DEFAULT_SPEED_RPM        (50)
+#define ZDT_DEFAULT_SPEED_RPM        (100)
 
 /** 默认加速度档位 0~255，0 表示不用曲线加减速、直接启动（启动冲击电流最大）。
  *  12V 供电时建议用 100 让转速缓慢爬升，避免瞬间堵转触发保护 */
 #define ZDT_DEFAULT_ACC              (0)
 
 /** 快速巡航转速及进入、退出该转速时使用的加减速档位。 */
-#define ZDT_FAST_SPEED_RPM           (50)
+#define ZDT_FAST_SPEED_RPM           (100)
 #define ZDT_FAST_ACC                 (0)
 
 /** 串口发送超时时间(ms) */
@@ -89,7 +89,7 @@ extern "C" {
 
 /** 横向 PID 增益：误差单位 mm，输出为横移修正转速(RPM)。
  *  Kp = 每 1mm 横向误差产生的修正转速。 */
-#define ZDT_LAT_KP                   (1.0f)
+#define ZDT_LAT_KP                   (10.0f)
 #define ZDT_LAT_KI                   (0.0f)   /* 暂只用 P */
 #define ZDT_LAT_KD                   (0.0f)
 
@@ -133,7 +133,7 @@ extern "C" {
 /** 旋转后保持的航向目标，单位度（state 0 顺时针转 90° 后为 90°）。 */
 #define ZDT_YAW_TARGET_DEG           (90.0f)
 /** 角度环比例增益：小 P 大致纠偏即可，避免轮子抖动 */
-#define ZDT_YAW_KP                   (1.0f)
+#define ZDT_YAW_KP                   (2.0f)
 #define ZDT_YAW_KI                   (0.0f)
 #define ZDT_YAW_KD                   (0.0f)
 /** 角度修正转速限幅(RPM) */
@@ -221,10 +221,16 @@ bool ZDT_Chassis_Rotate_Yaw(float delta_deg);
 /** 闭环行驶：向 dir 方向以 base_rpm 连续行驶，
  *  内环用陀螺仪角度 PID，外环用 corr_laser 激光做位置 PID（目标 corr_target_mm），
  *  conds[0] 为减速用的主激光条件，所有条件都满足才停车。
+ *  acc：加速/减速档位 0~255，0 = 不加减速、直接启动。
+ *  creep_rpm：接近停车点时降到的爬行速度，0 = 不减速、到点直接停。
+ *  creep_range_mm：主激光距停车阈值还有多远(mm)时开始减速。
+ *  pid_kp：激光纠偏 PID 的 P（每段可单独设置）。
  *  塔台接管 UART5 期间暂停，作业完成后继续当前路段。阻塞式。 */
 bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
                        const ZDT_AuxCond *conds, int cond_num,
-                       LaserID corr_laser, uint16_t corr_target_mm);
+                       LaserID corr_laser, uint16_t corr_target_mm,
+                       uint8_t acc, uint8_t creep_rpm, uint16_t creep_range_mm,
+                       float pid_kp);
 
 /** 前后直行 + 右侧激光横向居中（闭环）：向 dir 方向以 base_rpm 连续行驶，
  *  每个控制周期读右侧激光做横向 PID（目标 ZDT_LAT_TARGET_MM，有效范围 20~400mm），

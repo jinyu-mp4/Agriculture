@@ -46,7 +46,7 @@
 /* USER CODE BEGIN PD */
 #define IMU_LOOP_MS              10U
 #define CHASSIS_FAST_RPM         ZDT_FAST_SPEED_RPM  /* case 0/1 快速段 */
-#define CHASSIS_SLOW_RPM         50   /* 后续遍历段 */
+#define CHASSIS_SLOW_RPM         100   /* 后续遍历段 */
 
 /* 塔台捡拾控制参数 */
 #define TOWER_TRIGGER_Y_ERR    100     /* |err_y| <= 100 触发塔台作业 */
@@ -212,64 +212,89 @@ void StartChassis_Task(void *argument)
   {
     osDelay(20);
   }
-  osDelay(3000);
+  osDelay(5000);        /* 按键后等 5 秒 */
   s_route_active = true;
 
   /* 各状态的停止条件：所有激光距离都在指定区间内才切换 */
-  static const ZDT_AuxCond c_back_le58[1]                = { {LASER_BACK, 0, 58} };
-  static const ZDT_AuxCond c_back_le80[1]                = { {LASER_BACK, 0, 80} };
-  static const ZDT_AuxCond c_right_ge775_front_ge200[2]  = { {LASER_RIGHT, 775, 0},  {LASER_FRONT, 200, 0} };
+  static const ZDT_AuxCond c_back_le130[1]               = { {LASER_BACK, 0, 130} };
+  static const ZDT_AuxCond c_right_ge100[1]              = { {LASER_RIGHT, 100, 0} };
+  static const ZDT_AuxCond c_back_ge130[1]               = { {LASER_BACK, 130, 0} };
+  static const ZDT_AuxCond c_back_le70[1]                = { {LASER_BACK, 0, 70} };
+  static const ZDT_AuxCond c_right_ge770_front_ge200[2]  = { {LASER_RIGHT, 770, 0},  {LASER_FRONT, 200, 0} };
   static const ZDT_AuxCond c_front_le80_right_ge200[2]   = { {LASER_FRONT, 0, 80},   {LASER_RIGHT, 200, 0} };
-  static const ZDT_AuxCond c_right_ge1455_back_ge200[2]  = { {LASER_RIGHT, 1455, 0}, {LASER_BACK, 200, 0} };
-  static const ZDT_AuxCond c_back_le80_right_ge200[2]    = { {LASER_BACK, 0, 80},    {LASER_RIGHT, 200, 0} };
-  static const ZDT_AuxCond c_right_ge2130_front_ge200[2] = { {LASER_RIGHT, 2130, 0}, {LASER_FRONT, 200, 0} };
-  static const ZDT_AuxCond c_right_ge2900_back_ge200[2]  = { {LASER_RIGHT, 2900, 0}, {LASER_BACK, 200, 0} };
-  static const ZDT_AuxCond c_right_ge3540_front_ge200[2] = { {LASER_RIGHT, 3540, 0}, {LASER_FRONT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge1433_back_ge200[2]  = { {LASER_RIGHT, 1433, 0}, {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_back_le80_right_ge150[2]    = { {LASER_BACK, 0, 80},    {LASER_RIGHT, 150, 0} };
+  static const ZDT_AuxCond c_right_ge2155_front_ge200[2] = { {LASER_RIGHT, 2155, 0}, {LASER_FRONT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge2830_back_ge200[2]  = { {LASER_RIGHT, 2830, 0}, {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_right_ge3520_front_ge200[2] = { {LASER_RIGHT, 3520, 0}, {LASER_FRONT, 200, 0} };
 
   for (;;)
   {
     bool moved;
     switch (g_state)
     {
-      case 0:   /* 向后，直到 back<=58，然后顺时针转 90°（陀螺仪目标 90°） */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le58, 1, LASER_RIGHT, 100);
+      case 0:   /* 向后(right PID)、back<220 减速、back<130 停 → 调整 → 顺时针转 90° */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le130, 1, LASER_RIGHT, 100, 100, 50, 90, 20.0f);
         if (moved)
         {
-          moved = ZDT_Chassis_Rotate_Yaw(90.0f);   /* 顺时针 90°（若方向反了改 -90） */
+          /* 调整 1：right < 100 → 左移直到 right=100，稳定 300ms */
+          if (Laser_IsValid(LASER_RIGHT) && Laser_GetDistance(LASER_RIGHT) < 100)
+          {
+            moved = ZDT_Chassis_Drive(MOVE_LEFT, 50, c_right_ge100, 1, LASER_NUM, 0, 0, 0, 0, 10.0f);
+            if (moved) osDelay(300);
+          }
+
+          /* 调整 2：|yaw| > 10° → 旋转回 0°，稳定 30ms */
+          float yaw;
+          if (moved && ICM42688_GetYaw(&yaw) && (yaw > 10.0f || yaw < -10.0f))
+          {
+            moved = ZDT_Chassis_Rotate_Yaw(-yaw);
+            if (moved) osDelay(30);
+          }
+
+          /* 调整 3：back < 130 → 前移直到 back=130，稳定 30ms */
+          if (moved && Laser_IsValid(LASER_BACK) && Laser_GetDistance(LASER_BACK) < 130)
+          {
+            moved = ZDT_Chassis_Drive(MOVE_FORWARD, 50, c_back_ge130, 1, LASER_NUM, 0, 0, 0, 0, 10.0f);
+            if (moved) osDelay(30);
+          }
+
+          /* 顺时针转 90°（若方向反了改 -90） */
+          if (moved) moved = ZDT_Chassis_Rotate_Yaw(90.0f);
         }
         break;
-      case 1:   /* 向后，直到 back<80 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le80, 1, LASER_RIGHT, 100);
+      case 1:   /* 向后，缓慢加速，back<100 减速，back<70 停 */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le70, 1, LASER_RIGHT, 80, 100, 50, 30, 10.0f);
         break;
-      case 2:   /* 向左，直到 right>775 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge775_front_ge200, 2, LASER_BACK, 80);
+      case 2:   /* 向左，直到 right>770 且 front>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge770_front_ge200, 2, LASER_BACK, 80, 0, 0, 0, 10.0f);
         break;
       case 3:   /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50, 0, 0, 0, 10.0f);
         break;
-      case 4:   /* 向左，直到 right>1455 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge1455_back_ge200, 2, LASER_FRONT, 80);
+      case 4:   /* 向左，直到 right>1433 且 back>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge1433_back_ge200, 2, LASER_FRONT, 80, 0, 0, 0, 10.0f);
         break;
-      case 5:   /* 向后，直到 back<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge200, 2, LASER_RIGHT, 50);
+      case 5:   /* 向后，直到 back<80 且 right>150 */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge150, 2, LASER_RIGHT, 50, 0, 0, 0, 10.0f);
         break;
-      case 6:   /* 向左，直到 right>2130 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2130_front_ge200, 2, LASER_BACK, 80);
+      case 6:   /* 向左，直到 right>2155 且 front>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2155_front_ge200, 2, LASER_BACK, 80, 0, 0, 0, 10.0f);
         break;
       case 7:   /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50, 0, 0, 0, 10.0f);
         break;
-      case 8:   /* 向左，直到 right>2900 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2900_back_ge200, 2, LASER_FRONT, 80);
+      case 8:   /* 向左，直到 right>2830 且 back>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge2830_back_ge200, 2, LASER_FRONT, 80, 0, 0, 0, 10.0f);
         break;
-      case 9:   /* 向后，直到 back<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge200, 2, LASER_RIGHT, 50);
+      case 9:   /* 向后，直到 back<80 且 right>150 */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_SLOW_RPM, c_back_le80_right_ge150, 2, LASER_RIGHT, 50, 0, 0, 0, 10.0f);
         break;
-      case 10:  /* 向左，直到 right>3540 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge3540_front_ge200, 2, LASER_BACK, 80);
+      case 10:  /* 向左，直到 right>3520 且 front>200 */
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge3520_front_ge200, 2, LASER_BACK, 80, 0, 0, 0, 10.0f);
         break;
       case 11:  /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_SLOW_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 50, 0, 0, 0, 10.0f);
         break;
 
       default:  /* 状态12：全部完成，停车待机 */
