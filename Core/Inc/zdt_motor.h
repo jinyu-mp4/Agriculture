@@ -133,7 +133,7 @@ extern "C" {
 /** 旋转后保持的航向目标，单位度（state 0 顺时针转 90° 后为 90°）。 */
 #define ZDT_YAW_TARGET_DEG           (90.0f)
 /** 角度环比例增益：小 P 大致纠偏即可，避免轮子抖动 */
-#define ZDT_YAW_KP                   (2.0f)
+#define ZDT_YAW_KP                   (1.0f)
 #define ZDT_YAW_KI                   (0.0f)
 #define ZDT_YAW_KD                   (0.0f)
 /** 角度修正转速限幅(RPM) */
