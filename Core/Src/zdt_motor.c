@@ -382,6 +382,44 @@ bool ZDT_Chassis_Rotate_Speed(int16_t rpm)
     return ok;
 }
 
+bool ZDT_Chassis_Rotate_Yaw(float delta_deg)
+{
+    float yaw0;
+    if (!ICM42688_GetYaw(&yaw0)) return false;
+
+    float target = yaw0 + delta_deg;
+    uint32_t t_last = osKernelGetTickCount();
+
+    for (;;)
+    {
+        float yaw;
+        if (!ICM42688_GetYaw(&yaw)) { osDelay(10); continue; }
+
+        float err = target - yaw;
+        if (err > 180.0f)  err -= 360.0f;
+        if (err < -180.0f) err += 360.0f;
+        if (err > -2.0f && err < 2.0f) break;   /* 转到目标角（±2°） */
+
+        uint32_t now = osKernelGetTickCount();
+        float dt = (float)(now - t_last) / 1000.0f;
+        if (dt <= 0.0f) dt = 0.001f;
+        t_last = now;
+
+        float correction = ZDT_YAW_KP * err;
+        if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
+        int16_t rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
+
+        int16_t rpm[MOTOR_NUM];
+        for (int i = 0; i < MOTOR_NUM; i++)
+            rpm[i] = (int16_t)(rot_rpm * s_rot_table[0][i]);
+        zdt_chassis_speed_synced(rpm, ZDT_DEFAULT_ACC);
+        osDelay(10);
+    }
+
+    ZDT_Chassis_Stop();
+    return true;
+}
+
 /* 航向角 PID 跨路段保留状态，位置 PID 随路段重新初始化。 */
 static PID_t s_yaw_pid;
 static bool  s_yaw_pid_inited;
@@ -459,49 +497,55 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
         if (dt <= 0.0f) dt = 0.001f;
         t_last = now;
 
-        /* 内环保持上电 0°，正修正量对应俯视顺时针。 */
+        bool is_lateral = (dir == MOVE_LEFT || dir == MOVE_RIGHT);
+
+        /* 内环角度 PID：只在侧向移动（state 2/4/6/8/10）时使用 */
         int16_t rot_rpm = 0;
-        float yaw;
-        if (ICM42688_GetYaw(&yaw))
+        if (is_lateral)
         {
-            float err = ZDT_YAW_TARGET_DEG - yaw;
-            if (err > 180.0f)  err -= 360.0f;   /* 最短角归一化到 -180~180 */
-            if (err < -180.0f) err += 360.0f;
-            float correction = PID_Compute_Error(&s_yaw_pid, err, dt);
-            if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
-            /* 先把旋转修正取整，再叠加到四轮，使修正量保持对称。 */
-            rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
+            float yaw;
+            if (ICM42688_GetYaw(&yaw))
+            {
+                float err = ZDT_YAW_TARGET_DEG - yaw;
+                if (err > 180.0f)  err -= 360.0f;   /* 最短角归一化到 -180~180 */
+                if (err < -180.0f) err += 360.0f;
+                float correction = PID_Compute_Error(&s_yaw_pid, err, dt);
+                if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
+                /* 先把旋转修正取整，再叠加到四轮，使修正量保持对称。 */
+                rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
+            }
         }
 
-        /* 外环：位置 PID —— 暂时注释掉 */
+        /* 外环：横向激光纠偏（前后直行时用右侧激光，目标 corr_target_mm） */
         float corr_rpm = 0.0f;
-#if 0
-        if (++s_pos_phase >= 3)
+        if (!is_lateral)
         {
-            s_pos_phase = 0;
-            if (corr_laser != LASER_NUM)
+            if (++s_pos_phase >= 3)
             {
-                uint16_t d    = Laser_GetDistance(corr_laser);
-                uint16_t rmin = (corr_laser == LASER_RIGHT) ? ZDT_LAT_RANGE_MIN_MM : ZDT_LON_RANGE_MIN_MM;
-                uint16_t rmax = (corr_laser == LASER_RIGHT) ? ZDT_LAT_RANGE_MAX_MM : ZDT_LON_RANGE_MAX_MM;
-                bool     inv  = (corr_laser == LASER_RIGHT) ? ZDT_LAT_DIR_INVERT : ZDT_LON_DIR_INVERT;
+                s_pos_phase = 0;
+                if (corr_laser != LASER_NUM)
+                {
+                    uint16_t d    = Laser_GetDistance(corr_laser);
+                    uint16_t rmin = (corr_laser == LASER_RIGHT) ? ZDT_LAT_RANGE_MIN_MM : ZDT_LON_RANGE_MIN_MM;
+                    uint16_t rmax = (corr_laser == LASER_RIGHT) ? ZDT_LAT_RANGE_MAX_MM : ZDT_LON_RANGE_MAX_MM;
+                    bool     inv  = (corr_laser == LASER_RIGHT) ? ZDT_LAT_DIR_INVERT : ZDT_LON_DIR_INVERT;
 
-                if (Laser_IsValid(corr_laser) && d >= rmin && d <= rmax)
-                {
-                    /* 前/右激光：err = 目标 - 实测；后激光：err = 实测 - 目标 */
-                    float err = (corr_laser == LASER_BACK)
-                                ? ((float)d - (float)corr_target_mm)
-                                : ((float)corr_target_mm - (float)d);
-                    corr_rpm = PID_Compute_Error(&s_corr_pid, err, dt * 3.0f);
-                    if (inv) corr_rpm = -corr_rpm;
-                }
-                else
-                {
-                    PID_Reset(&s_corr_pid);
+                    if (Laser_IsValid(corr_laser) && d >= rmin && d <= rmax)
+                    {
+                        /* 前/右激光：err = 目标 - 实测；后激光：err = 实测 - 目标 */
+                        float err = (corr_laser == LASER_BACK)
+                                    ? ((float)d - (float)corr_target_mm)
+                                    : ((float)corr_target_mm - (float)d);
+                        corr_rpm = PID_Compute_Error(&s_corr_pid, err, dt * 3.0f);
+                        if (inv) corr_rpm = -corr_rpm;
+                    }
+                    else
+                    {
+                        PID_Reset(&s_corr_pid);
+                    }
                 }
             }
         }
-#endif
 
         /* 第一项是减速用的主激光，电机按 acc 平滑降到爬行速度。 */
         int16_t cruise = base_rpm;

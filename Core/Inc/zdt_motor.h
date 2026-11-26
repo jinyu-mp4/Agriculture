@@ -54,11 +54,11 @@ extern "C" {
 
 /** 默认加速度档位 0~255，0 表示不用曲线加减速、直接启动（启动冲击电流最大）。
  *  12V 供电时建议用 100 让转速缓慢爬升，避免瞬间堵转触发保护 */
-#define ZDT_DEFAULT_ACC              (100)
+#define ZDT_DEFAULT_ACC              (0)
 
 /** 快速巡航转速及进入、退出该转速时使用的加减速档位。 */
-#define ZDT_FAST_SPEED_RPM           (100)
-#define ZDT_FAST_ACC                 (100)
+#define ZDT_FAST_SPEED_RPM           (50)
+#define ZDT_FAST_ACC                 (0)
 
 /** 串口发送超时时间(ms) */
 #define ZDT_UART_TIMEOUT_MS          (50)
@@ -90,7 +90,7 @@ extern "C" {
 /** 横向 PID 增益：误差单位 mm，输出为横移修正转速(RPM)。
  *  Kp = 每 1mm 横向误差产生的修正转速。 */
 #define ZDT_LAT_KP                   (1.0f)
-#define ZDT_LAT_KI                   (0.1f)   /* 加积分消除稳态偏移，0.1~0.2 可调 */
+#define ZDT_LAT_KI                   (0.0f)   /* 暂只用 P */
 #define ZDT_LAT_KD                   (0.0f)
 
 /** 横移修正转速限幅(RPM)：避免修正过大导致整车横向打摆 */
@@ -130,8 +130,8 @@ extern "C" {
 
 /* —— 航向角闭环（陀螺仪 → 角度环，内环高频）—— */
 
-/** 上电校准后的前方，整个路线保持该航向，单位度。 */
-#define ZDT_YAW_TARGET_DEG           (0.0f)
+/** 旋转后保持的航向目标，单位度（state 0 顺时针转 90° 后为 90°）。 */
+#define ZDT_YAW_TARGET_DEG           (90.0f)
 /** 角度环比例增益：小 P 大致纠偏即可，避免轮子抖动 */
 #define ZDT_YAW_KP                   (1.0f)
 #define ZDT_YAW_KI                   (0.0f)
@@ -143,8 +143,8 @@ extern "C" {
 
 /* —— 提前减速（接近停止点时降到爬行速度，停得更准）—— */
 
-/** 爬行速度(RPM)：接近停止阈值时降到该值 */
-#define ZDT_CREEP_RPM                (50)
+/** 爬行速度(RPM)：接近停止阈值时降到该值（=100 即不减速、到点直接停） */
+#define ZDT_CREEP_RPM                (100)
 /** 主激光距停车阈值还有多远(mm)时开始减速 */
 #define ZDT_CREEP_RANGE_MM           (750U)
 /** 多机同步下发时相邻两条电机命令的间隔(ms)。间隔太短可能出现“粘包”
@@ -213,6 +213,10 @@ bool ZDT_Chassis_Rotate(float angle_deg);
 /** 整车原地旋转（速度模式，连续转动）：rpm > 0 顺时针(俯视)，< 0 逆时针。
  *  需调用 ZDT_Chassis_Stop() 停止。 */
 bool ZDT_Chassis_Rotate_Speed(int16_t rpm);
+
+/** 整车原地旋转（陀螺仪 yaw 闭环）：旋转 delta_deg（单位度），转到目标角（±2°）后停车。阻塞式。
+ *  delta_deg 与 ICM42688 yaw 同坐标、符号与航向角 PID 一致；方向反了把调用处符号取反即可。 */
+bool ZDT_Chassis_Rotate_Yaw(float delta_deg);
 
 /** 闭环行驶：向 dir 方向以 base_rpm 连续行驶，
  *  内环用陀螺仪角度 PID，外环用 corr_laser 激光做位置 PID（目标 corr_target_mm），

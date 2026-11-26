@@ -46,7 +46,7 @@
 /* USER CODE BEGIN PD */
 #define IMU_LOOP_MS              10U
 #define CHASSIS_FAST_RPM         ZDT_FAST_SPEED_RPM  /* case 0/1 快速段 */
-#define CHASSIS_SLOW_RPM         100   /* 后续遍历段 */
+#define CHASSIS_SLOW_RPM         50   /* 后续遍历段 */
 
 /* 塔台捡拾控制参数 */
 #define TOWER_TRIGGER_Y_ERR    100     /* |err_y| <= 100 触发塔台作业 */
@@ -216,7 +216,7 @@ void StartChassis_Task(void *argument)
   s_route_active = true;
 
   /* 各状态的停止条件：所有激光距离都在指定区间内才切换 */
-  static const ZDT_AuxCond c_right_le80_back_ge200[2]     = { {LASER_RIGHT, 0, 80},   {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_back_le58[1]                = { {LASER_BACK, 0, 58} };
   static const ZDT_AuxCond c_back_le80[1]                = { {LASER_BACK, 0, 80} };
   static const ZDT_AuxCond c_right_ge775_front_ge200[2]  = { {LASER_RIGHT, 775, 0},  {LASER_FRONT, 200, 0} };
   static const ZDT_AuxCond c_front_le80_right_ge200[2]   = { {LASER_FRONT, 0, 80},   {LASER_RIGHT, 200, 0} };
@@ -231,11 +231,15 @@ void StartChassis_Task(void *argument)
     bool moved;
     switch (g_state)
     {
-      case 0:   /* 向右，直到 right<80 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_RIGHT, CHASSIS_FAST_RPM, c_right_le80_back_ge200, 2, LASER_FRONT, 80);
+      case 0:   /* 向后，直到 back<=58，然后顺时针转 90°（陀螺仪目标 90°） */
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le58, 1, LASER_RIGHT, 100);
+        if (moved)
+        {
+          moved = ZDT_Chassis_Rotate_Yaw(90.0f);   /* 顺时针 90°（若方向反了改 -90） */
+        }
         break;
       case 1:   /* 向后，直到 back<80 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le80, 1, LASER_RIGHT, 80);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le80, 1, LASER_RIGHT, 100);
         break;
       case 2:   /* 向左，直到 right>775 且 front>200 */
         moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SLOW_RPM, c_right_ge775_front_ge200, 2, LASER_BACK, 80);
