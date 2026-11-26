@@ -19,7 +19,6 @@
 #include "zdt_motor.h"
 #include "laser.h"
 #include "jetson_coord.h"
-#include "claw.h"
 #include "icm42688.h"
 #include "pid.h"
 #include "cmsis_os.h"
@@ -474,8 +473,9 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
             rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
         }
 
-        /* 外环：位置 PID（只用 corr_laser 纠偏），低频，每 ~33ms 更新 */
+        /* 外环：位置 PID —— 暂时注释掉 */
         float corr_rpm = 0.0f;
+#if 0
         if (++s_pos_phase >= 3)
         {
             s_pos_phase = 0;
@@ -501,6 +501,7 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
                 }
             }
         }
+#endif
 
         /* 第一项是减速用的主激光，电机按 acc 平滑降到爬行速度。 */
         int16_t cruise = base_rpm;
@@ -842,13 +843,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         Coord_FeedByte(huart);
         return;
     }
-
-    /* USART6 = 夹爪舵机反馈 */
-    if (huart == &huart6)
-    {
-        Claw_FeedByte(huart);
-        return;
-    }
 }
 
 /** 串口出错（如溢出 ORE/帧错 FE）：恢复对应驱动的单字节接收，避免断流 */
@@ -863,12 +857,6 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     if (huart == &huart4)
     {
         Coord_UART_Error(huart);
-        return;
-    }
-
-    if (huart == &huart6)
-    {
-        Claw_UART_Error(huart);
         return;
     }
 }

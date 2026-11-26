@@ -45,8 +45,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define IMU_LOOP_MS              10U
-#define CHASSIS_FAST_RPM         50    /* 测试：先统一 50 */
-#define CHASSIS_SLOW_RPM         50    /* 测试：先统一 50 */
+#define CHASSIS_FAST_RPM         ZDT_FAST_SPEED_RPM  /* case 0/1 快速段 */
+#define CHASSIS_SLOW_RPM         100   /* 后续遍历段 */
 
 /* 塔台捡拾控制参数 */
 #define TOWER_TRIGGER_Y_ERR    100     /* |err_y| <= 100 触发塔台作业 */
@@ -178,7 +178,7 @@ void MX_FREERTOS_Init(void) {
   Data_TaskHandle = osThreadNew(StartData_Task, NULL, &Data_Task_attributes);
 
   /* creation of Tower_Task */
-  Tower_TaskHandle = osThreadNew(StartTask03, NULL, &Tower_Task_attributes);
+  // Tower_TaskHandle = osThreadNew(StartTask03, NULL, &Tower_Task_attributes);  /* 暂注释：只调底盘，禁用塔台任务 */
 
   /* USER CODE BEGIN RTOS_THREADS */
   osThreadNew(StartImuTask, NULL, &s_imu_task_attributes);
@@ -207,8 +207,6 @@ void StartChassis_Task(void *argument)
   Laser_Init();
   Claw_Init();
 
-  /* 单调机械臂：暂时注释掉底盘运动（按键等待 + 状态机），只保留初始化 */
-#if 0
   /* 上电后等待按下 PC1 按键才开始行驶（PC1 另一端接 GND，低电平有效） */
   while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_1) != GPIO_PIN_RESET)
   {
@@ -218,7 +216,7 @@ void StartChassis_Task(void *argument)
   s_route_active = true;
 
   /* 各状态的停止条件：所有激光距离都在指定区间内才切换 */
-  static const ZDT_AuxCond c_right_le100_back_ge200[2]     = { {LASER_RIGHT, 0, 100},   {LASER_BACK, 200, 0} };
+  static const ZDT_AuxCond c_right_le80_back_ge200[2]     = { {LASER_RIGHT, 0, 80},   {LASER_BACK, 200, 0} };
   static const ZDT_AuxCond c_back_le80[1]                = { {LASER_BACK, 0, 80} };
   static const ZDT_AuxCond c_right_ge775_front_ge200[2]  = { {LASER_RIGHT, 775, 0},  {LASER_FRONT, 200, 0} };
   static const ZDT_AuxCond c_front_le80_right_ge200[2]   = { {LASER_FRONT, 0, 80},   {LASER_RIGHT, 200, 0} };
@@ -233,8 +231,8 @@ void StartChassis_Task(void *argument)
     bool moved;
     switch (g_state)
     {
-      case 0:   /* 向右，直到 right<100 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_RIGHT, CHASSIS_FAST_RPM, c_right_le100_back_ge200, 2, LASER_FRONT, 80);
+      case 0:   /* 向右，直到 right<80 且 back>200 */
+        moved = ZDT_Chassis_Drive(MOVE_RIGHT, CHASSIS_FAST_RPM, c_right_le80_back_ge200, 2, LASER_FRONT, 80);
         break;
       case 1:   /* 向后，直到 back<80 */
         moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_FAST_RPM, c_back_le80, 1, LASER_RIGHT, 80);
@@ -286,12 +284,6 @@ void StartChassis_Task(void *argument)
     /* 停下后等待 700ms */
     osDelay(700);
     g_state++;
-  }
-#endif
-
-  for (;;)
-  {
-    osDelay(1000);
   }
   /* USER CODE END StartChassis_Task */
 }

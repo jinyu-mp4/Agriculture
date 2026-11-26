@@ -234,10 +234,8 @@ clean:
 #######################################
 # download directl without debugging
 #######################################
-FLASH_CMD = openocd -f openocd_dap.cfg -c init -c "cortex_m reset_config sysresetreq" -c "reset halt" -c "flash write_image erase $(BUILD_DIR)/$(TARGET).bin 0x08000000" -c "mww 0xE000ED0C 0x05FA0004" -c "sleep 100" -c shutdown
-
 download_dap:
-	$(FLASH_CMD) || $(FLASH_CMD) || $(FLASH_CMD)
+	openocd -f openocd_dap.cfg -c init -c halt -c "flash write_image erase $(BUILD_DIR)/$(TARGET).bin 0x08000000" -c reset -c shutdown
 download_jlink:
 	JFlash -openprj'stm32.jflash' -open'$(BUILD_DIR)/$(TARGET).hex',0x8000000 -auto -startapp -exit
 

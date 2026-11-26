@@ -57,8 +57,8 @@ extern "C" {
 #define ZDT_DEFAULT_ACC              (100)
 
 /** 快速巡航转速及进入、退出该转速时使用的加减速档位。 */
-#define ZDT_FAST_SPEED_RPM           (200)
-#define ZDT_FAST_ACC                 (200)
+#define ZDT_FAST_SPEED_RPM           (100)
+#define ZDT_FAST_ACC                 (100)
 
 /** 串口发送超时时间(ms) */
 #define ZDT_UART_TIMEOUT_MS          (50)
@@ -85,12 +85,12 @@ extern "C" {
 #define ZDT_LAT_RANGE_MAX_MM         (400)
 
 /** 横向居中目标墙距(mm)：误差 = 目标值 - 实测右侧距离。按实车摆正后标定 */
-#define ZDT_LAT_TARGET_MM            (77.0f)   /* 横向居中目标墙距(mm) */
+#define ZDT_LAT_TARGET_MM            (83.0f)   /* 横向居中目标墙距(mm) */
 
 /** 横向 PID 增益：误差单位 mm，输出为横移修正转速(RPM)。
  *  Kp = 每 1mm 横向误差产生的修正转速。 */
-#define ZDT_LAT_KP                   (8.0f)
-#define ZDT_LAT_KI                   (0.0f)   /* 加积分消除稳态偏移，0.1~0.2 可调 */
+#define ZDT_LAT_KP                   (1.0f)
+#define ZDT_LAT_KI                   (0.1f)   /* 加积分消除稳态偏移，0.1~0.2 可调 */
 #define ZDT_LAT_KD                   (0.0f)
 
 /** 横移修正转速限幅(RPM)：避免修正过大导致整车横向打摆 */
@@ -111,14 +111,14 @@ extern "C" {
 
 /** 纵向保持目标墙距(mm)，前侧激光专用（state 0/4/8/12）：
  *  误差 = 目标值 - 实测前侧距离。按实车摆正后标定 */
-#define ZDT_LON_TARGET_MM            (27.0f)   /* 纵向保持目标墙距(mm) */
+#define ZDT_LON_TARGET_MM            (30)
 
 /** 纵向保持目标墙距(mm)，后侧激光专用：用 back 作参考坐标时以该值为目标。
  *  前/后侧激光安装位置不一致，所以两者单独标定。 */
 #define ZDT_LON_TARGET_BACK_MM       (30)
 
 /** 纵向 PID 增益：误差单位 mm，输出为前后修正转速(RPM)。 */
-#define ZDT_LON_KP                   (8.0f)
+#define ZDT_LON_KP                   (1.0f)
 #define ZDT_LON_KI                   (0.0f)
 #define ZDT_LON_KD                   (0.0f)
 
