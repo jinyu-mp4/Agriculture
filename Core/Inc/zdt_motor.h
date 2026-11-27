@@ -204,6 +204,9 @@ bool ZDT_Chassis_Move(ZDT_MoveDir dir, float distance_mm);
 /** 以指定转速（RPM）运行位置模式，轮子按位移（mm）换算脉冲，到位直接停，阻塞等待。 */
 bool ZDT_Chassis_Move_Direct(ZDT_MoveDir dir, float distance_mm, uint16_t rpm);
 
+/** 同步停车并移交 UART5，等塔台完成后返回停车命令发完的时刻（系统 tick）。 */
+uint32_t ZDT_Chassis_ParkForTower(void);
+
 /** 整车原地旋转（位置模式）：angle_deg > 0 顺时针(俯视)，< 0 逆时针。 */
 bool ZDT_Chassis_Rotate(float angle_deg);
 

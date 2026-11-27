@@ -19,15 +19,16 @@
 #include "zdt_motor.h"
 #include "laser.h"
 #include "jetson_coord.h"
+#include "tower_motor.h"
 #include "claw.h"
 #include "icm42688.h"
 #include "pid.h"
 #include "cmsis_os.h"
 #include <math.h>
 
-/* The tower takes over UART5 after the chassis confirms it has stopped. */
+/* 塔台就绪时才响应新坐标，底盘停车后置位作业标志并交出 UART5。 */
+extern volatile bool g_tower_ready;
 extern volatile bool g_tower_working;
-extern volatile bool g_chassis_parked;
 /* 航向角闭环目标(°)：按钮按下时锁存的陀螺仪读数，定义在 freertos.c */
 extern volatile float g_yaw_target_deg;
 
@@ -331,6 +332,28 @@ bool ZDT_Chassis_Stop(void)
     return ok;
 }
 
+static bool zdt_tower_has_new_point(uint32_t *last_frame)
+{
+    CoordPoint point;
+    if (!Coord_GetPoint(&point) || point.frame == *last_frame) return false;
+
+    /* 行驶中只用新帧触发，Y 必须在目标 ±200 像素内。塔台未就绪时也丢弃旧帧。 */
+    *last_frame = point.frame;
+    return g_tower_ready && point.y >= TOWER_Y_TARGET - TOWER_TRIGGER_Y_ERR &&
+           point.y <= TOWER_Y_TARGET + TOWER_TRIGGER_Y_ERR;
+}
+
+uint32_t ZDT_Chassis_ParkForTower(void)
+{
+    /* 四轮停车指令全部发出后等 500 ms，再移交串口。失败时每隔 20 ms 重试停车。 */
+    while (!ZDT_Chassis_Stop()) osDelay(20);
+    uint32_t stopped_at = osKernelGetTickCount();
+    osDelay(TOWER_ACTION_GAP_MS);
+    g_tower_working = true;
+    while (g_tower_working) osDelay(5);
+    return stopped_at;
+}
+
 static bool zdt_chassis_move_position(ZDT_MoveDir dir, float distance_mm, uint16_t rpm)
 {
     int32_t  net[MOTOR_NUM];
@@ -363,18 +386,45 @@ bool ZDT_Chassis_Move(ZDT_MoveDir dir, float distance_mm)
 bool ZDT_Chassis_Move_Direct(ZDT_MoveDir dir, float distance_mm, uint16_t rpm)
 {
     if (rpm == 0) return false;
-    if (!zdt_chassis_move_position(dir, distance_mm, rpm))
+    if (distance_mm < 0.0f)
     {
-#if ZDT_CHASSIS_FAULT_STOP_ENABLED
-        /* 位置模式指令没发全时，按故障停车开关处理。 */
-        ZDT_Chassis_Stop();
-#endif
-        return false;
+        distance_mm = -distance_mm;
+        dir = zdt_flip_dir(dir);
     }
 
-    /* UART5 当前只发不收，按轮转理论用时等待到位后再切换路线状态。 */
-    osDelay(zdt_move_duration_ms(distance_mm, rpm));
-    return ZDT_Chassis_Stop();
+    uint32_t frame = Coord_GetFrameCount();
+    const float speed_mm_s = ZDT_MM_S_PER_RPM * rpm;
+    for (;;)
+    {
+        if (!zdt_chassis_move_position(dir, distance_mm, rpm))
+        {
+#if ZDT_CHASSIS_FAULT_STOP_ENABLED
+            /* 位置模式指令没发全时，按故障停车开关处理。 */
+            ZDT_Chassis_Stop();
+#endif
+            return false;
+        }
+
+        /* 定距行驶每 10 ms 检查新坐标。串口无位置反馈，暂停后按停车前的运行时长估算余程（mm）。 */
+        uint32_t started_at = osKernelGetTickCount();
+        uint32_t duration_ms = zdt_move_duration_ms(distance_mm, rpm);
+        uint32_t travel_ms = (uint32_t)(distance_mm * 1000.0f / speed_mm_s);
+        bool paused = false;
+        while (osKernelGetTickCount() - started_at < duration_ms)
+        {
+            if (osKernelGetTickCount() - started_at < travel_ms && zdt_tower_has_new_point(&frame))
+            {
+                uint32_t stopped_at = ZDT_Chassis_ParkForTower();
+                distance_mm -= (float)(stopped_at - started_at) * 0.001f * speed_mm_s;
+                if (distance_mm <= 0.0f || zdt_mm_to_pulses(distance_mm) == 0) return true;
+                frame = Coord_GetFrameCount();
+                paused = true;
+                break;
+            }
+            osDelay(10);
+        }
+        if (!paused) return ZDT_Chassis_Stop();
+    }
 }
 
 bool ZDT_Chassis_Rotate(float angle_deg)
@@ -458,17 +508,19 @@ static bool zdt_chassis_drive(ZDT_MoveDir dir, int16_t base_rpm,
     float corr_elapsed_s = 0.0f;
     float corr_rpm = 0.0f;
 
+    /* 路段起步前记录帧号，收到新的检测结果才停车，忽略发车前缓存的坐标。 */
+    uint32_t frame = Coord_GetFrameCount();
+    bool driving = false;
     t_last = osKernelGetTickCount();
 
     for (;;)
     {
-        /* 塔台接管期间停车，交出 UART5 */
-        if (g_tower_working)
+        /* 行驶中收到符合 Y 范围的新帧就停车，作业完成后接着跑本路段。 */
+        if (driving && zdt_tower_has_new_point(&frame))
         {
-            if (!ZDT_Chassis_Stop()) return false;
-            g_chassis_parked = true;
-            while (g_tower_working) osDelay(5);
-            g_chassis_parked = false;
+            ZDT_Chassis_ParkForTower();
+            driving = false;
+            frame = Coord_GetFrameCount();
             t_last = osKernelGetTickCount();
             /* 停车期间墙距可能改变，恢复行驶时重新计算外环修正。 */
             PID_Reset(&s_corr_pid);
@@ -590,7 +642,8 @@ static bool zdt_chassis_drive(ZDT_MoveDir dir, int16_t base_rpm,
             rpm[i] = (int16_t)v;
         }
         /* Emm 0 档直接应用目标转速。快速段发令失败时尝试同步停车。 */
-        if (!zdt_chassis_speed_synced(rpm, ZDT_DEFAULT_ACC) && monitor_stop)
+        if (zdt_chassis_speed_synced(rpm, ZDT_DEFAULT_ACC)) driving = true;
+        else if (monitor_stop)
         {
             ZDT_Chassis_Stop();
             return false;

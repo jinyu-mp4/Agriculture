@@ -33,15 +33,15 @@ extern "C" {
  * ========================================================================== */
 
 /** 三个电机各自的移动速度(RPM)，按实测标定 */
-#define TOWER_TURNTABLE_SPEED      (30)    /* 转台（地址5） */
+#define TOWER_TURNTABLE_SPEED      (50)    /* 转台（地址5） */
 #define TOWER_ARM_SPEED            (200)   /* 作业臂前后（地址6） */
-#define TOWER_LIFT_SPEED           (200)   /* 升降（地址7） */
+#define TOWER_LIFT_SPEED           (500)   /* 升降（地址7） */
 
 /** 三个电机各自的加速度档位 0~255，数值越大加速越快（0 表示不加减速、直接启动，冲击最大）。
  *  升降(地址7)行程短、容易被加减速拖慢，单独调高让它爬升更快。 */
-#define TOWER_TURNTABLE_ACC        (50)   /* 转台（地址5） */
-#define TOWER_ARM_ACC              (50)   /* 作业臂（地址6） */
-#define TOWER_LIFT_ACC             (50)   /* 升降（地址7） */
+#define TOWER_TURNTABLE_ACC        (100)   /* 转台（地址5） */
+#define TOWER_ARM_ACC              (100)   /* 作业臂（地址6） */
+#define TOWER_LIFT_ACC             (200)   /* 升降（地址7） */
 
 /** 默认加速度档位 0~255，0 表示不用曲线加减速、直接启动 */
 #define TOWER_DEFAULT_ACC          (100)

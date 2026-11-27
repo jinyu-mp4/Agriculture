@@ -3,13 +3,17 @@
   * @file    claw.c
   * @brief   串口舵机夹爪控制（USART6）
   *
-  *          发送：固定 ASCII 指令控制夹爪开合（串口总线舵机协议），只发不收。
+  *          发送：固定 ASCII 指令控制夹爪开合，检查 USART6 发送结果。
   *          接收：USART6 单字节中断接收，逐字节拼出夹爪回传的反馈帧（ASCII，
   *          以 '!' 或换行结尾），供屏幕显示、判断夹爪是否故障。
   ******************************************************************************
   */
 
 #include "claw.h"
+#include "cmsis_os.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include <stdio.h>
 #include <string.h>
 
 /* 串口发送超时(ms) */
@@ -17,10 +21,12 @@
 
 /* 反馈帧缓冲最大长度 */
 #define CLAW_REPLY_MAX         64
+#define CLAW_POSITION_WAIT_MS  100U   /* 发送查询后等待位置回读的时间（ms）。 */
 
-/* 固定指令：ID=000，P 后为位置(0~1000)，T 后为运动时间(ms)，! 结束 */
-static const char CLAW_OPEN_CMD[]  = "#000P660T0500!";
-static const char CLAW_CLOSE_CMD[] = "#000P1000T0500!";
+/* 舵机 ID 为 000，位置字段单位为 µs，开到位回读允许 ±30 µs。 */
+#define CLAW_OPEN_POSITION_US  660U
+#define CLAW_CLOSE_POSITION_US 1000U
+#define CLAW_OPEN_TOLERANCE_US 30U
 
 /* 接收解析状态 */
 static uint8_t s_rx_byte;                       /* 单字节 IT 接收缓冲 */
@@ -30,19 +36,76 @@ static char    s_last[CLAW_REPLY_MAX];          /* 最近一帧完整反馈 */
 static volatile uint32_t s_rx_count;            /* 累计接收字节数 */
 static volatile uint32_t s_frame_count;         /* 累计拼出的完整帧数 */
 
-static void claw_send(const char *cmd)
+static bool claw_send(const char *cmd)
 {
-    HAL_UART_Transmit(&huart6, (uint8_t *)cmd, (uint16_t)strlen(cmd), CLAW_UART_TIMEOUT_MS);
+    /* 开闭都是固定位置，发送出错可重试同一指令，最多 3 次，间隔 20 ms。 */
+    uint16_t len = (uint16_t)strlen(cmd);
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+        if (HAL_UART_Transmit(&huart6, (uint8_t *)cmd, len, CLAW_UART_TIMEOUT_MS) == HAL_OK)
+        {
+            return true;
+        }
+        if (attempt < 2) osDelay(20);
+    }
+    return false;
 }
 
-void Claw_Open(void)
+static bool claw_move(unsigned position)
 {
-    claw_send(CLAW_OPEN_CMD);
+    /* ID 固定三位，位置和动作时间各四位。T0500 为 500 ms。 */
+    char command[sizeof("#000P1000T0500!")];
+    snprintf(command, sizeof(command), "#000P%04uT0500!", position);
+    return claw_send(command);
 }
 
-void Claw_Close(void)
+bool Claw_Open(void)
 {
-    claw_send(CLAW_CLOSE_CMD);
+    return claw_move(CLAW_OPEN_POSITION_US);
+}
+
+bool Claw_Close(void)
+{
+    return claw_move(CLAW_CLOSE_POSITION_US);
+}
+
+ClawOpenStatus Claw_CheckOpen(void)
+{
+    uint32_t frame = s_frame_count;
+    if (!claw_send("#000PRAD!")) return CLAW_OPEN_NO_REPLY;
+
+    uint32_t start = osKernelGetTickCount();
+    while (osKernelGetTickCount() - start < CLAW_POSITION_WAIT_MS)
+    {
+        /* 中断保存的有效位置帧形如 #000P0660。查询回显和其他舵机应答不参与判断。 */
+        char reply[sizeof("#000P0660")];
+        taskENTER_CRITICAL();
+        uint32_t current_frame = s_frame_count;
+        if (current_frame != frame) memcpy(reply, s_last, sizeof(reply));
+        taskEXIT_CRITICAL();
+
+        if (current_frame != frame)
+        {
+            frame = current_frame;
+            if (memcmp(reply, "#000P", 5) == 0)
+            {
+                unsigned position = 0;
+                size_t digit = 5;
+                while (digit < sizeof(reply) - 1 && reply[digit] >= '0' && reply[digit] <= '9')
+                {
+                    position = position * 10U + (unsigned)(reply[digit++] - '0');
+                }
+                if (digit >= 8 && reply[digit] == '\0' && position >= 500U && position <= 2500U)
+                {
+                    return (position >= CLAW_OPEN_POSITION_US - CLAW_OPEN_TOLERANCE_US &&
+                            position <= CLAW_OPEN_POSITION_US + CLAW_OPEN_TOLERANCE_US)
+                           ? CLAW_OPEN_REACHED : CLAW_OPEN_MISMATCH;
+                }
+            }
+        }
+        osDelay(5);
+    }
+    return CLAW_OPEN_NO_REPLY;
 }
 
 void Claw_Init(void)
