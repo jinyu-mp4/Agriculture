@@ -28,6 +28,8 @@
 /* The tower takes over UART5 after the chassis confirms it has stopped. */
 extern volatile bool g_tower_working;
 extern volatile bool g_chassis_parked;
+/* 航向角闭环目标(°)：按钮按下时锁存的陀螺仪读数，定义在 freertos.c */
+extern volatile float g_yaw_target_deg;
 
 /* ============================================================================
  *                            常量与配置
@@ -417,6 +419,8 @@ bool ZDT_Chassis_Rotate_Speed(int16_t rpm)
 /* 航向角 PID 跨路段保留状态，位置 PID 随路段重新初始化。 */
 static PID_t s_yaw_pid;
 static bool  s_yaw_pid_inited;
+static uint8_t s_yaw_lost_cnt;              /* 陀螺仪连续丢帧计数（内环 10ms/帧） */
+static bool    s_yaw_pid_enabled = true;    /* 航向角 PID 使能：连续丢帧后置 false */
 static PID_t s_corr_pid;
 
 static bool zdt_chassis_drive(ZDT_MoveDir dir, int16_t base_rpm,
@@ -509,18 +513,38 @@ static bool zdt_chassis_drive(ZDT_MoveDir dir, int16_t base_rpm,
         if (dt <= 0.0f) dt = 0.001f;
         t_last = now;
 
-        /* 内环保持上电 0°，正修正量对应俯视顺时针。 */
+        /* 内环保持按钮锁存的航向，正修正量对应俯视顺时针。 */
         int16_t rot_rpm = 0;
         float yaw;
         if (ICM42688_GetYaw(&yaw))
         {
-            float err = ZDT_YAW_TARGET_DEG - yaw;
+            /* 数据恢复：清零连续丢帧计数；若此前因丢帧被禁用，先复位 PID 再恢复，
+             * 避免沿用断流前残留的积分/微分状态。 */
+            s_yaw_lost_cnt = 0;
+            if (!s_yaw_pid_enabled)
+            {
+                s_yaw_pid_enabled = true;
+                PID_Reset(&s_yaw_pid);
+            }
+
+            float err = g_yaw_target_deg - yaw;
             if (err > 180.0f)  err -= 360.0f;   /* 最短角归一化到 -180~180 */
             if (err < -180.0f) err += 360.0f;
             float correction = PID_Compute_Error(&s_yaw_pid, err, dt);
             if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
             /* 先把旋转修正取整，再叠加到四轮，使修正量保持对称。 */
             rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
+        }
+        else
+        {
+            /* 陀螺仪连续丢帧：计数达到阈值后禁用航向角 PID，rot_rpm 保持 0，
+             * 只靠位置环/基准转速行驶，避免拿过期数据乱修航向。 */
+            if (s_yaw_lost_cnt < ZDT_YAW_LOST_FRAMES) s_yaw_lost_cnt++;
+            if (s_yaw_lost_cnt >= ZDT_YAW_LOST_FRAMES && s_yaw_pid_enabled)
+            {
+                s_yaw_pid_enabled = false;
+                PID_Reset(&s_yaw_pid);
+            }
         }
 
         /* 每轮检查激光有效性，超时或超出纠偏范围时立即撤掉旧修正。 */

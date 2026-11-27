@@ -46,13 +46,14 @@
 /* USER CODE BEGIN PD */
 #define IMU_LOOP_MS              10U
 /* 麦轮按运动方向选用电机基础转速（RPM），满足各段停车条件后直接停车。 */
-#define CHASSIS_STRAIGHT_RPM     100   /* 纵移：向前或向后。 */
+#define CHASSIS_STRAIGHT_RPM      50   /* 纵移：向前或向后。原 100 改为 50 */
 #define CHASSIS_SIDEWAYS_RPM      50   /* 侧移：向左或向右，包含定距左移。 */
-#define CHASSIS_EXIT_DISTANCE_MM 400.0f /* 12 段左移距离（mm） */
+#define CHASSIS_EXIT_DISTANCE_MM 700.0f /* 12 段左移距离（mm） */
 
 /* 塔台捡拾控制参数 */
 #define TOWER_TRIGGER_Y_ERR    100     /* |err_y| <= 100 触发塔台作业 */
-#define TOWER_ARM_HALF_TURN_PULSES  1600  /* 电机6(作业臂)伸长半圈 = 3200/2 */
+#define TOWER_ARM_HALF_TURN_PULSES  (-1600)  /* 电机6(作业臂)伸长半圈(3200/2)，负方向为伸长 */
+#define TOWER_ARM_EXTENDED_PULSES  (-2400)  /* 电机 6 最大伸出 2400 脉冲，驱动坐标为 -2400，原点为 0 */
 #define TOWER_CORR_DEADBAND    10     /* 纠偏死区：|误差| <= 10 像素视为已对准 */
 #define TOWER_CORR_IN_POS_CNT  3      /* 连续 N 帧在死区内才算对准 */
 #define TOWER_CORR_K_Y         1.0f   /* 转台(电机5)纠 Y 的比例增益 */
@@ -106,10 +107,16 @@ volatile bool     g_coord_valid;
 /* 两个任务通过请求和停车确认交接 UART5。 */
 volatile bool     g_tower_working = false;
 volatile bool     g_chassis_parked = false;
+/* 塔台命令发送失败后锁定作业，TOWER_MOTOR_NUM 表示无故障。 */
+static volatile TowerMotorID s_tower_fault = TOWER_MOTOR_NUM;
 static volatile bool s_route_active;
 
 /* 底盘状态机当前状态号（Chassis_Task 写，Data_Task 只读显示） */
 volatile int32_t  g_state = 0;
+
+/* 航向角闭环目标(°)：按钮按下时锁存当前陀螺仪读数。
+ * 上电后要等 Jetson 开机才发车，等待期间陀螺仪已累计漂移，0° 已不可用。 */
+volatile float g_yaw_target_deg = 0.0f;
 
 /* USER CODE END Variables */
 /* Definitions for Chassis_Task */
@@ -138,7 +145,8 @@ const osThreadAttr_t Tower_Task_attributes = {
 /* USER CODE BEGIN FunctionPrototypes */
 static void StartImuTask(void *argument);
 static bool Tower_WaitFreshPoint(uint32_t *frame, CoordPoint *point);
-static uint32_t Tower_StartReturn(TowerMotorID id, int32_t position);
+static bool Tower_MoveArm(int32_t *position, int32_t target);
+static bool Tower_ReturnTurntable(int32_t position);
 /* USER CODE END FunctionPrototypes */
 
 void StartChassis_Task(void *argument);
@@ -218,19 +226,24 @@ void StartChassis_Task(void *argument)
   {
     osDelay(20);
   }
+  /* 按钮按下即锁存当前航向为闭环目标：上电等待 Jetson 开机期间陀螺仪已漂移，0° 已不可用 */
+  {
+    float yaw0;
+    g_yaw_target_deg = ICM42688_GetYaw(&yaw0) ? yaw0 : 0.0f;
+  }
   osDelay(3000);
   s_route_active = true;
 
   /* 各状态的停止条件：所有激光距离都在指定区间内才切换 */
   static const ZDT_AuxCond c_right_le100[1]               = { {LASER_RIGHT, 0, 110} };
   static const ZDT_AuxCond c_back_le80[1]                = { {LASER_BACK, 0, 80} };
-  static const ZDT_AuxCond c_right_ge775_front_ge200[2]  = { {LASER_RIGHT, 775, 0},  {LASER_FRONT, 200, 0} };
-  static const ZDT_AuxCond c_front_le80_right_ge200[2]   = { {LASER_FRONT, 0, 80},   {LASER_RIGHT, 200, 0} };
-  static const ZDT_AuxCond c_right_ge1455_back_ge200[2]  = { {LASER_RIGHT, 1455, 0}, {LASER_BACK, 200, 0} };
-  static const ZDT_AuxCond c_back_le80_right_ge200[2]    = { {LASER_BACK, 0, 80},    {LASER_RIGHT, 200, 0} };
-  static const ZDT_AuxCond c_right_ge2130_front_ge200[2] = { {LASER_RIGHT, 2130, 0}, {LASER_FRONT, 200, 0} };
-  static const ZDT_AuxCond c_right_ge2900_back_ge200[2]  = { {LASER_RIGHT, 2900, 0}, {LASER_BACK, 200, 0} };
-  static const ZDT_AuxCond c_right_ge3540_front_ge200[2] = { {LASER_RIGHT, 3540, 0}, {LASER_FRONT, 200, 0} };
+  static const ZDT_AuxCond c_right_ge775_front_ge200[1]  = { {LASER_RIGHT, 775, 0}};
+  static const ZDT_AuxCond c_front_le80_right_ge200[1]   = { {LASER_FRONT, 0, 100}};
+  static const ZDT_AuxCond c_right_ge1455_back_ge200[1]  = { {LASER_RIGHT, 1455, 0}};
+  static const ZDT_AuxCond c_back_le80_right_ge200[1]    = { {LASER_BACK, 0, 100}};
+  static const ZDT_AuxCond c_right_ge2130_front_ge200[1] = { {LASER_RIGHT, 2130, 0}};
+  static const ZDT_AuxCond c_right_ge2900_back_ge200[1]  = { {LASER_RIGHT, 2900, 0}};
+  static const ZDT_AuxCond c_right_ge3540_front_ge200[1] = { {LASER_RIGHT, 3540, 0}};
 
   for (;;)
   {
@@ -238,41 +251,41 @@ void StartChassis_Task(void *argument)
     /* ZDT_Chassis_Drive 的最后两项是外环纠偏激光和目标墙距（mm）。 */
     switch (g_state)
     {
-      case 0:   /* 只向右平移，右侧距离不大于 100 mm 时直接停车。 */
-        moved = ZDT_Chassis_Drive_Monitored(MOVE_RIGHT, CHASSIS_SIDEWAYS_RPM, c_right_le100, 1, LASER_NUM, 0);
+      case 0:   /* 向右平移，右侧激光纠偏(目标 100mm)，右侧距离不大于 110mm 时停车。 */
+        moved = ZDT_Chassis_Drive_Monitored(MOVE_RIGHT, CHASSIS_SIDEWAYS_RPM, c_right_le100, 1, LASER_FRONT, 40);
         break;
       case 1:   /* 向后直行，后侧距离不大于 80 mm 时直接停车。 */
         moved = ZDT_Chassis_Drive_Monitored(MOVE_BACKWARD, CHASSIS_STRAIGHT_RPM, c_back_le80, 1, LASER_RIGHT, 80);
         break;
       case 2:   /* 向左，直到 right>775 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge775_front_ge200, 2, LASER_BACK, 55);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge775_front_ge200, 1, LASER_BACK, 55);
         break;
       case 3:   /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_STRAIGHT_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 40);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_STRAIGHT_RPM, c_front_le80_right_ge200, 1, LASER_RIGHT, 50);
         break;
       case 4:   /* 向左，直到 right>1455 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge1455_back_ge200, 2, LASER_FRONT, 40);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge1455_back_ge200, 1, LASER_FRONT, 40);
         break;
       case 5:   /* 向后，直到 back<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_STRAIGHT_RPM, c_back_le80_right_ge200, 2, LASER_RIGHT, 40);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_STRAIGHT_RPM, c_back_le80_right_ge200, 1 , LASER_RIGHT, 50);
         break;
       case 6:   /* 向左，直到 right>2130 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge2130_front_ge200, 2, LASER_BACK, 55);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge2130_front_ge200, 1, LASER_BACK, 55);
         break;
       case 7:   /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_STRAIGHT_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 40);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_STRAIGHT_RPM, c_front_le80_right_ge200, 1, LASER_RIGHT, 50);
         break;
       case 8:   /* 向左，直到 right>2900 且 back>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge2900_back_ge200, 2, LASER_FRONT, 40);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge2900_back_ge200, 1, LASER_FRONT, 40);
         break;
       case 9:   /* 向后，直到 back<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_STRAIGHT_RPM, c_back_le80_right_ge200, 2, LASER_RIGHT, 40);
+        moved = ZDT_Chassis_Drive(MOVE_BACKWARD, CHASSIS_STRAIGHT_RPM, c_back_le80_right_ge200, 1 , LASER_RIGHT, 50);
         break;
       case 10:  /* 向左，直到 right>3540 且 front>200 */
-        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge3540_front_ge200, 2, LASER_BACK, 55);
+        moved = ZDT_Chassis_Drive(MOVE_LEFT, CHASSIS_SIDEWAYS_RPM, c_right_ge3540_front_ge200, 1, LASER_BACK, 55);
         break;
       case 11:  /* 向前，直到 front<80 且 right>200 */
-        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_STRAIGHT_RPM, c_front_le80_right_ge200, 2, LASER_RIGHT, 40);
+        moved = ZDT_Chassis_Drive(MOVE_FORWARD, CHASSIS_STRAIGHT_RPM, c_front_le80_right_ge200, 1, LASER_RIGHT, 50);
         break;
       case 12:  /* 左移 400 mm，四轮同步位置模式，按目标脉冲到位停车。 */
         moved = ZDT_Chassis_Move_Direct(MOVE_LEFT, CHASSIS_EXIT_DISTANCE_MM, CHASSIS_SIDEWAYS_RPM);
@@ -359,6 +372,10 @@ void StartData_Task(void *argument)
     }
 
     /* 将读取值显示在 LCD 上 */
+    /* 保留塔台故障电机的地址，便于现场排查串口。 */
+    static char *const tower_fault_text[] = {"Motor 5 TX ERR", "Motor 6 TX ERR", "Motor 7 TX ERR"};
+    TowerMotorID tower_fault = s_tower_fault;
+    if (tower_fault < TOWER_MOTOR_NUM) LCD_DisplayString(10, 30, tower_fault_text[tower_fault]);
     LCD_DisplayString(10, 60, "Front:");
     LCD_DisplayNumber(70, 60, (int32_t)g_front_mm, 5);
 
@@ -411,17 +428,29 @@ void StartTask03(void *argument)
 {
   /* USER CODE BEGIN StartTask03 */
   int32_t err_x, err_y;
-  int32_t off_5 = 0, off_6 = 0, off_7 = 0;   /* 各电机相对上电零点的累计脉冲偏移 */
+  int32_t off_6 = 0, off_7 = 0;   /* 电机 6、7 相对上电零点的累计脉冲偏移 */
+  TowerMotorID fault_motor;
 
   /* 上电即初始化三轴并设零点（记录上电原点），不等到 state 3 */
   TowerMotor_Init();
-  TowerMotor_Enable(TOWER_TURNTABLE, true);
-  TowerMotor_Enable(TOWER_ARM, true);
-  TowerMotor_Enable(TOWER_LIFT, true);
+  /* 三轴都需要有效的上电坐标，任一使能或清零命令发送失败就停止塔台任务。 */
+  for (TowerMotorID id = TOWER_TURNTABLE; id < TOWER_MOTOR_NUM; id++)
+  {
+    if (!TowerMotor_Enable(id, true))
+    {
+      s_tower_fault = id;
+      osThreadExit();
+    }
+  }
   osDelay(500);   /* 等电机使能后稳定，再设零点，避免零点漂移导致回零过冲 */
-  TowerMotor_ZeroPosition(TOWER_TURNTABLE);   /* 上电位置设为绝对零点 */
-  TowerMotor_ZeroPosition(TOWER_ARM);
-  TowerMotor_ZeroPosition(TOWER_LIFT);
+  for (TowerMotorID id = TOWER_TURNTABLE; id < TOWER_MOTOR_NUM; id++)
+  {
+    if (!TowerMotor_ZeroPosition(id))
+    {
+      s_tower_fault = id;
+      osThreadExit();
+    }
+  }
   Claw_Open();
   osDelay(500);
 
@@ -433,10 +462,12 @@ void StartTask03(void *argument)
       osDelay(20);
     }
 
-    /* 2. 底盘不停车，直接把电机 6 移到原点（上电零点 + 1600，即伸长方向） */
-    TowerMotor_MoveAbsolute(TOWER_ARM, TOWER_ARM_HALF_TURN_PULSES);
-    off_6 = TOWER_ARM_HALF_TURN_PULSES;
-    osDelay(TowerMotor_TravelTimeMs(TOWER_ARM, TOWER_ARM_HALF_TURN_PULSES) + 500);
+    /* 2. 底盘行进中预伸作业臂至 -1600 脉冲，等运动结束后再检测鸡蛋。 */
+    if (!Tower_MoveArm(&off_6, TOWER_ARM_HALF_TURN_PULSES))
+    {
+      s_tower_fault = TOWER_ARM;
+      osThreadExit();
+    }
 
     /* 3. 等鸡蛋 Y 坐标进入设定值 ±100 范围（视觉触发） */
     for (;;)
@@ -452,6 +483,10 @@ void StartTask03(void *argument)
       osDelay(20);
     }
 
+    /* 3.5 识别到鸡蛋后先打开夹爪（huart6，与底盘 UART5 互不冲突），等它开到位再继续 */
+    Claw_Open();
+    osDelay(500);
+
     /* 4. 通知底盘停车，等它停稳（UART5 让给塔台） */
     g_tower_working = true;
     {
@@ -462,7 +497,9 @@ void StartTask03(void *argument)
       }
     }
 
-    /* 2. 电机 5（转台）：纠偏 Y，记录偏移（每轮等新一帧坐标再纠） */
+    /* 电机 5 逐次走完 Y 纠偏脉冲，累计位移供中止时反向复位。 */
+    fault_motor = TOWER_TURNTABLE;
+    int32_t off_5 = 0;
     int in_pos_y = 0;
     uint32_t frame = Coord_GetFrameCount();
     CoordPoint point;
@@ -483,60 +520,87 @@ void StartTask03(void *argument)
       if (pulses < -TOWER_CORR_MAX_PULSES) pulses = -TOWER_CORR_MAX_PULSES;
       pulses = -pulses;   /* 电机5 纠偏方向取反 */
 
-      TowerMotor_Move(TOWER_TURNTABLE, pulses);
+      if (!TowerMotor_Move(TOWER_TURNTABLE, pulses)) goto tower_fault;
       off_5 += pulses;
+      osDelay(TowerMotor_TravelTimeMs(TOWER_TURNTABLE, pulses) + TOWER_AXIS_SETTLE_MS);
+      frame = Coord_GetFrameCount();
     }
 
-    /* 3. 电机 6（作业臂）：纠偏 X，记录偏移（每轮等新一帧坐标再纠） */
+    /* 3. 电机 6 用绝对位置纠偏 X，限幅到 [-2400, 0] 脉冲，移完再取新帧。 */
+    fault_motor = TOWER_ARM;
     int in_pos_x = 0;
+    int moves_x = 0;
+    bool x_aligned = false;
     frame = Coord_GetFrameCount();
-    for (int i = 0; i < TOWER_CORR_MAX_ITER; i++)
+    while (Tower_WaitFreshPoint(&frame, &point))
     {
-      if (!Tower_WaitFreshPoint(&frame, &point)) break;   /* 视觉断流，结束纠偏 */
-
       err_x = point.x - TOWER_X_TARGET;
       if (err_x > -TOWER_CORR_DEADBAND && err_x < TOWER_CORR_DEADBAND)
       {
-        if (++in_pos_x >= TOWER_CORR_IN_POS_CNT) break;
+        if (++in_pos_x >= TOWER_CORR_IN_POS_CNT)
+        {
+          x_aligned = true;
+          break;
+        }
         continue;
       }
       in_pos_x = 0;
+
+      /* 到伸出上限后，只用到位后的图像判定。X 仍超出死区就退出本次夹取。 */
+      if (off_6 == TOWER_ARM_EXTENDED_PULSES || moves_x >= TOWER_CORR_MAX_ITER) break;
 
       int32_t pulses = (int32_t)((float)err_x * TOWER_CORR_K_X);
       if (pulses >  TOWER_CORR_MAX_PULSES) pulses =  TOWER_CORR_MAX_PULSES;
       if (pulses < -TOWER_CORR_MAX_PULSES) pulses = -TOWER_CORR_MAX_PULSES;
 
-      TowerMotor_Move(TOWER_ARM, pulses);
-      off_6 += pulses;
+      int32_t target = off_6 + pulses;
+      if (target < TOWER_ARM_EXTENDED_PULSES) target = TOWER_ARM_EXTENDED_PULSES;
+      if (target > 0) target = 0;
+      if (target == off_6) break;   /* 到原点且纠偏还要求继续回缩。 */
+
+      if (!Tower_MoveArm(&off_6, target)) goto tower_fault;
+      moves_x++;
+      frame = Coord_GetFrameCount();
+    }
+
+    if (!x_aligned)
+    {
+      /* X 未确认对准时跳过下降和夹取。先将升降轴置于上电零点，再收臂，最后回转台。 */
+      fault_motor = TOWER_LIFT;
+      if (!TowerMotor_MoveAbsolute(TOWER_LIFT, 0)) goto tower_fault;
+      osDelay(TOWER_AXIS_SETTLE_MS);   /* 本轮未下降，升降轴已在零点，留 100 ms 稳定余量。 */
+
+      fault_motor = TOWER_ARM;
+      if (!Tower_MoveArm(&off_6, 0)) goto tower_fault;
+
+      fault_motor = TOWER_TURNTABLE;
+      if (!Tower_ReturnTurntable(off_5)) goto tower_fault;
+      goto finish_tower;
     }
 
     /* 4. 电机 7 下降 -> 夹爪闭合 -> 等 1s */
-    TowerMotor_Move(TOWER_LIFT, -TOWER_LIFT_DOWN_PULSES);
+    fault_motor = TOWER_LIFT;
+    if (!TowerMotor_Move(TOWER_LIFT, -TOWER_LIFT_DOWN_PULSES)) goto tower_fault;
     off_7 -= TOWER_LIFT_DOWN_PULSES;
     osDelay(TowerMotor_TravelTimeMs(TOWER_LIFT, TOWER_LIFT_DOWN_PULSES) + 500);   /* 按实际速度+加速度算到位时间 */
     Claw_Close();           /* 下降到位后立即闭合 */
     osDelay(1000);          /* 等 1s */
 
-    /* 5. 电机 7 复位 -> 复位后等 1s */
-    TowerMotor_Move(TOWER_LIFT, -off_7);
+    /* 5. 电机 7 复位后才允许转台动作，也保证下一轮从升降零点开始。 */
+    if (!TowerMotor_Move(TOWER_LIFT, -off_7)) goto tower_fault;
     off_7 = 0;
     osDelay(TowerMotor_TravelTimeMs(TOWER_LIFT, TOWER_LIFT_DOWN_PULSES) + 500);   /* 等升降真正回到顶再走下一步 */
     osDelay(1000);          /* 复位后等 1s */
 
-    /* 5.5 作业臂收回（回到 state 3 的伸长点，而不是上电零点） */
-    {
-      int32_t  corr    = off_6 - TOWER_ARM_HALF_TURN_PULSES;
-      uint32_t arm_ms  = TowerMotor_TravelTimeMs(TOWER_ARM, corr) + TOWER_AXIS_SETTLE_MS;
-      while (!TowerMotor_MoveAbsolute(TOWER_ARM, TOWER_ARM_HALF_TURN_PULSES)) osDelay(50);
-      off_6 = TOWER_ARM_HALF_TURN_PULSES;
-      if (arm_ms) osDelay(arm_ms);
-    }
+    /* 5.5 正常夹取后将作业臂移到 -1600 脉冲的放蛋准备点。 */
+    fault_motor = TOWER_ARM;
+    if (!Tower_MoveArm(&off_6, TOWER_ARM_HALF_TURN_PULSES)) goto tower_fault;
 
-    /* 6. 转台移到放蛋位置（绝对 -3600，避免相对累计漂移） */
+    /* 6. 转台移到放蛋位置（绝对脉冲），发送失败时停止本轮，避免从未知位置回零。 */
+    fault_motor = TOWER_TURNTABLE;
     {
-      int32_t  dist = -3600 - off_5;
-      TowerMotor_MoveAbsolute(TOWER_TURNTABLE, TOWER_DROP_POSITION);
-      off_5 = TOWER_DROP_POSITION;
+      int32_t dist = TOWER_DROP_POSITION - off_5;
+      if (!TowerMotor_MoveAbsolute(TOWER_TURNTABLE, TOWER_DROP_POSITION)) goto tower_fault;
       osDelay(TowerMotor_TravelTimeMs(TOWER_TURNTABLE, dist) + 500);   /* 按实际速度算时间 +500ms 余量 */
     }
 
@@ -544,15 +608,11 @@ void StartTask03(void *argument)
     Claw_Open();
     osDelay(500);
 
-    /* 8. 转台回零（作业臂已在 5.5 回零） */
-    {
-      uint32_t turntable_ms = Tower_StartReturn(TOWER_TURNTABLE, off_5);
-      off_5 = 0;
-      off_7 = 0;
-      if (turntable_ms) osDelay(turntable_ms);
-    }
+    /* 8. 从放蛋位置复位转台并停车。 */
+    if (!Tower_ReturnTurntable(TOWER_DROP_POSITION)) goto tower_fault;
 
-    /* 9. 回零等待结束后，清掉本轮的视觉坐标。 */
+finish_tower:
+    /* 9. 成功放蛋或取消夹取后，等复位结束再清坐标并恢复底盘。 */
     taskENTER_CRITICAL();
     Coord_ClearPoint();
     g_coord_x = 0;
@@ -564,6 +624,12 @@ void StartTask03(void *argument)
     g_tower_working = false;
     osDelay(TOWER_POST_DELAY_MS);
   }
+
+tower_fault:
+  /* 保持底盘停车请求，只重试停车命令。串口恢复后也结束塔台任务，防止从未知位置继续。 */
+  s_tower_fault = fault_motor;
+  while (!TowerMotor_Stop(fault_motor)) osDelay(50);
+  osThreadExit();
   /* USER CODE END StartTask03 */
 }
 
@@ -584,13 +650,32 @@ static bool Tower_WaitFreshPoint(uint32_t *frame, CoordPoint *point)
   return false;
 }
 
-static uint32_t Tower_StartReturn(TowerMotorID id, int32_t position)
+static bool Tower_MoveArm(int32_t *position, int32_t target)
 {
-  if (position == 0) return 0;
+  if (target == *position) return true;
 
-  /* 绝对零点可重复发送，UART 恢复后继续本次回零。 */
-  while (!TowerMotor_MoveAbsolute(id, 0)) osDelay(50);
-  return TowerMotor_TravelTimeMs(id, position) + TOWER_AXIS_SETTLE_MS;
+  /* 绝对目标是有符号脉冲数。预伸时与底盘共用 UART5，同一目标最多尝试 3 次，间隔 50 ms。 */
+  for (int attempt = 0; attempt < 3; attempt++)
+  {
+    if (TowerMotor_MoveAbsolute(TOWER_ARM, target))
+    {
+      osDelay(TowerMotor_TravelTimeMs(TOWER_ARM, target - *position) + TOWER_AXIS_SETTLE_MS);
+      *position = target;
+      return true;
+    }
+    osDelay(50);
+  }
+  return false;
+}
+
+static bool Tower_ReturnTurntable(int32_t position)
+{
+  if (position == 0) return true;
+
+  /* 只发一次反向等量脉冲，发送失败后由上层停车，避免重复位移。估时完成后主动停车。 */
+  if (!TowerMotor_Move(TOWER_TURNTABLE, -position)) return false;
+  osDelay(TowerMotor_TravelTimeMs(TOWER_TURNTABLE, position) + TOWER_AXIS_SETTLE_MS);
+  return TowerMotor_Stop(TOWER_TURNTABLE);
 }
 
 static void StartImuTask(void *argument)
