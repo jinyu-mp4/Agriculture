@@ -64,6 +64,9 @@ uint8_t Laser_GetConfidence(LaserID id);
 /** 是否已收到过至少一帧有效数据 */
 bool Laser_IsValid(LaserID id);
 
+/** 最近 150 ms 内是否收到有效帧，用于控制环避免沿用过期距离。 */
+bool Laser_IsFresh(LaserID id);
+
 /** 已接收字节数（诊断用） */
 uint32_t Laser_GetRxCount(LaserID id);
 

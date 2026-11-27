@@ -19,9 +19,11 @@
 #include "zdt_motor.h"
 #include "laser.h"
 #include "jetson_coord.h"
+#include "claw.h"
 #include "icm42688.h"
 #include "pid.h"
 #include "cmsis_os.h"
+#include <math.h>
 
 /* The tower takes over UART5 after the chassis confirms it has stopped. */
 extern volatile bool g_tower_working;
@@ -33,6 +35,7 @@ extern volatile bool g_chassis_parked;
 
 #define ZDT_PI              3.14159265358979f
 #define ZDT_CHECK_BYTE      0x6B   /* 校验字节 */
+#define ZDT_MM_S_PER_RPM    (ZDT_PI * ZDT_WHEEL_DIAMETER_MM / (60.0f * ZDT_GEAR_RATIO))
 
 /* 四个电机的硬件映射 */
 typedef struct
@@ -238,6 +241,12 @@ static uint32_t zdt_mm_to_pulses(float mm)
                       ZDT_GEAR_RATIO * ZDT_PULSES_PER_REV);
 }
 
+/* 按轮周长和指定转速估算用时，额外留 20% 给发令及电机响应。 */
+static uint32_t zdt_move_duration_ms(float distance_mm, uint16_t rpm)
+{
+    return (uint32_t)(fabsf(distance_mm) / (ZDT_MM_S_PER_RPM * rpm) * 1200.0f);
+}
+
 /** 角度(度) -> 电机脉冲数：原地旋转时每个轮子沿半径 R 的圆滚过一段弧长 */
 static uint32_t zdt_angle_to_pulses(float angle_deg)
 {
@@ -320,7 +329,7 @@ bool ZDT_Chassis_Stop(void)
     return ok;
 }
 
-bool ZDT_Chassis_Move(ZDT_MoveDir dir, float distance_mm)
+static bool zdt_chassis_move_position(ZDT_MoveDir dir, float distance_mm, uint16_t rpm)
 {
     int32_t  net[MOTOR_NUM];
     uint32_t pulses;
@@ -340,7 +349,30 @@ bool ZDT_Chassis_Move(ZDT_MoveDir dir, float distance_mm)
         net[i] = (int32_t)s_dir_table[dir][i] * (int32_t)pulses;
     }
 
-    return zdt_chassis_pos_synced(net, ZDT_DEFAULT_SPEED_RPM, ZDT_DEFAULT_ACC);
+    /* 位置模式直接以设定的 RPM 走目标脉冲数，到位停车。 */
+    return zdt_chassis_pos_synced(net, rpm, ZDT_DEFAULT_ACC);
+}
+
+bool ZDT_Chassis_Move(ZDT_MoveDir dir, float distance_mm)
+{
+    return zdt_chassis_move_position(dir, distance_mm, ZDT_DEFAULT_SPEED_RPM);
+}
+
+bool ZDT_Chassis_Move_Direct(ZDT_MoveDir dir, float distance_mm, uint16_t rpm)
+{
+    if (rpm == 0) return false;
+    if (!zdt_chassis_move_position(dir, distance_mm, rpm))
+    {
+#if ZDT_CHASSIS_FAULT_STOP_ENABLED
+        /* 位置模式指令没发全时，按故障停车开关处理。 */
+        ZDT_Chassis_Stop();
+#endif
+        return false;
+    }
+
+    /* UART5 当前只发不收，按轮转理论用时等待到位后再切换路线状态。 */
+    osDelay(zdt_move_duration_ms(distance_mm, rpm));
+    return ZDT_Chassis_Stop();
 }
 
 bool ZDT_Chassis_Rotate(float angle_deg)
@@ -382,118 +414,14 @@ bool ZDT_Chassis_Rotate_Speed(int16_t rpm)
     return ok;
 }
 
-bool ZDT_Chassis_Rotate_Yaw(float delta_deg)
-{
-    float yaw0;
-    if (!ICM42688_GetYaw(&yaw0)) return false;
-
-    float target = yaw0 + delta_deg;
-    uint32_t t_last = osKernelGetTickCount();
-
-    for (;;)
-    {
-        float yaw;
-        if (!ICM42688_GetYaw(&yaw)) { osDelay(10); continue; }
-
-        float err = target - yaw;
-        if (err > 180.0f)  err -= 360.0f;
-        if (err < -180.0f) err += 360.0f;
-        if (err > -2.0f && err < 2.0f) break;   /* 转到目标角（±2°） */
-
-        uint32_t now = osKernelGetTickCount();
-        float dt = (float)(now - t_last) / 1000.0f;
-        if (dt <= 0.0f) dt = 0.001f;
-        t_last = now;
-
-        float correction = ZDT_YAW_KP * err;
-        if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
-        int16_t rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
-
-        int16_t rpm[MOTOR_NUM];
-        for (int i = 0; i < MOTOR_NUM; i++)
-            rpm[i] = (int16_t)(rot_rpm * s_rot_table[0][i]);
-        zdt_chassis_speed_synced(rpm, ZDT_DEFAULT_ACC);
-        osDelay(10);
-    }
-
-    ZDT_Chassis_Stop();
-    return true;
-}
-
-/** 绝对航向旋转：原地转到绝对航向 target_deg（单位度），
- *  误差在 ±tol_deg 内保持 hold_ms 后停车。阻塞式。 */
-bool ZDT_Chassis_Rotate_YawAbs(float target_deg, float tol_deg, uint32_t hold_ms)
-{
-    uint32_t t_last = osKernelGetTickCount();
-    uint32_t hold_start = 0;
-    bool     in_tol = false;
-
-    for (;;)
-    {
-        float yaw;
-        if (!ICM42688_GetYaw(&yaw)) { osDelay(10); continue; }
-
-        float err = target_deg - yaw;
-        if (err > 180.0f)  err -= 360.0f;
-        if (err < -180.0f) err += 360.0f;
-
-        if (err > -tol_deg && err < tol_deg)
-        {
-            if (!in_tol)
-            {
-                in_tol = true;
-                hold_start = osKernelGetTickCount();
-            }
-            else if (osKernelGetTickCount() - hold_start >= hold_ms)
-            {
-                break;   /* 在容差内保持 hold_ms，稳定后停车 */
-            }
-        }
-        else
-        {
-            in_tol = false;
-        }
-
-        uint32_t now = osKernelGetTickCount();
-        float    dt  = (float)(now - t_last) / 1000.0f;
-        if (dt <= 0.0f) dt = 0.001f;
-        t_last = now;
-
-        float correction = ZDT_YAW_KP * err;
-        if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
-        int16_t rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
-
-        int16_t rpm[MOTOR_NUM];
-        for (int i = 0; i < MOTOR_NUM; i++)
-            rpm[i] = (int16_t)(rot_rpm * s_rot_table[0][i]);
-        zdt_chassis_speed_synced(rpm, ZDT_DEFAULT_ACC);
-        osDelay(10);
-    }
-
-    ZDT_Chassis_Stop();
-    return true;
-}
-
 /* 航向角 PID 跨路段保留状态，位置 PID 随路段重新初始化。 */
 static PID_t s_yaw_pid;
 static bool  s_yaw_pid_inited;
 static PID_t s_corr_pid;
-static uint32_t s_pos_phase = 0;   /* 位置环分频：每 3 个内环周期更新一次(~33ms) */
 
-static bool zdt_approaching_stop(const ZDT_AuxCond *primary, uint16_t creep_range_mm)
-{
-    if (!Laser_IsValid(primary->laser)) return false;
-
-    uint32_t distance = Laser_GetDistance(primary->laser);
-    return (primary->max_mm != 0 && distance <= primary->max_mm + creep_range_mm) ||
-           (primary->min_mm != 0 && distance + creep_range_mm >= primary->min_mm);
-}
-
-bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
-                       const ZDT_AuxCond *conds, int cond_num,
-                       LaserID corr_laser, uint16_t corr_target_mm,
-                       uint8_t acc, uint8_t creep_rpm, uint16_t creep_range_mm,
-                       float pid_kp)
+static bool zdt_chassis_drive(ZDT_MoveDir dir, int16_t base_rpm,
+                              const ZDT_AuxCond *conds, int cond_num,
+                              LaserID corr_laser, uint16_t corr_target_mm, bool monitor_stop)
 {
     uint32_t t_last;
 
@@ -507,16 +435,24 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
     /* 位置环 PID：按本次纠偏激光（right=横向，front/back=纵向）选用对应增益 */
     if (corr_laser == LASER_RIGHT)
     {
-        PID_Init(&s_corr_pid, pid_kp, ZDT_LAT_KI, ZDT_LAT_KD,
+        PID_Init(&s_corr_pid, ZDT_LAT_KP, ZDT_LAT_KI, ZDT_LAT_KD,
                  -(float)ZDT_LAT_MAX_RPM, (float)ZDT_LAT_MAX_RPM);
     }
     else
     {
-        PID_Init(&s_corr_pid, pid_kp, ZDT_LON_KI, ZDT_LON_KD,
+        PID_Init(&s_corr_pid, ZDT_LON_KP, ZDT_LON_KI, ZDT_LON_KD,
                  -(float)ZDT_LON_MAX_RPM, (float)ZDT_LON_MAX_RPM);
     }
     PID_Reset(&s_corr_pid);
-    s_pos_phase = 0;
+
+    const bool corr_is_right = corr_laser == LASER_RIGHT;
+    const uint16_t corr_min_mm = corr_is_right ? ZDT_LAT_RANGE_MIN_MM : ZDT_LON_RANGE_MIN_MM;
+    const uint16_t corr_max_mm = corr_is_right ? ZDT_LAT_RANGE_MAX_MM : ZDT_LON_RANGE_MAX_MM;
+    const bool corr_inverted = corr_is_right ? ZDT_LAT_DIR_INVERT : ZDT_LON_DIR_INVERT;
+    /* 外环每 3 个控制周期重算一次，期间保持最近一次有效修正（RPM）。 */
+    uint8_t corr_phase = 0;
+    float corr_elapsed_s = 0.0f;
+    float corr_rpm = 0.0f;
 
     t_last = osKernelGetTickCount();
 
@@ -530,115 +466,140 @@ bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
             while (g_tower_working) osDelay(5);
             g_chassis_parked = false;
             t_last = osKernelGetTickCount();
+            /* 停车期间墙距可能改变，恢复行驶时重新计算外环修正。 */
+            PID_Reset(&s_corr_pid);
+            corr_phase = 0;
+            corr_elapsed_s = 0.0f;
+            corr_rpm = 0.0f;
         }
 
         /* 检查停止条件（全部满足才停） */
         bool stop = true;
+        bool primary_reached = false;
         for (int i = 0; i < cond_num; i++)
         {
+            bool valid = monitor_stop ? Laser_IsFresh(conds[i].laser) : Laser_IsValid(conds[i].laser);
+            if (!valid)
+            {
+                /* 快速段的主停车激光过期时，直接停车并交给状态机报错。 */
+                if (monitor_stop && i == 0)
+                {
+                    ZDT_Chassis_Stop();
+                    return false;
+                }
+                stop = false;
+                break;
+            }
+
             uint16_t d = Laser_GetDistance(conds[i].laser);
-            if (!Laser_IsValid(conds[i].laser)) { stop = false; break; }
+            if (monitor_stop && i == 0) primary_reached = d <= conds[i].max_mm;
             if (conds[i].min_mm != 0 && d < conds[i].min_mm) { stop = false; break; }
             if (conds[i].max_mm != 0 && d > conds[i].max_mm) { stop = false; break; }
         }
         if (stop && cond_num > 0) break;
+        if (primary_reached)
+        {
+            /* 主激光已到停车点而附加条件未齐，停车并报错，避免再向墙面推进。 */
+            ZDT_Chassis_Stop();
+            return false;
+        }
 
         uint32_t now = osKernelGetTickCount();
         float    dt  = (float)(now - t_last) / 1000.0f;
         if (dt <= 0.0f) dt = 0.001f;
         t_last = now;
 
-        bool is_lateral = (dir == MOVE_LEFT || dir == MOVE_RIGHT);
-
-        /* 内环角度 PID：只在侧向移动（state 2/4/6/8/10）时使用 */
+        /* 内环保持上电 0°，正修正量对应俯视顺时针。 */
         int16_t rot_rpm = 0;
-        if (is_lateral)
+        float yaw;
+        if (ICM42688_GetYaw(&yaw))
         {
-            float yaw;
-            if (ICM42688_GetYaw(&yaw))
-            {
-                float err = ZDT_YAW_TARGET_DEG - yaw;
-                if (err > 180.0f)  err -= 360.0f;   /* 最短角归一化到 -180~180 */
-                if (err < -180.0f) err += 360.0f;
-                float correction = PID_Compute_Error(&s_yaw_pid, err, dt);
-                if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
-                /* 先把旋转修正取整，再叠加到四轮，使修正量保持对称。 */
-                rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
-            }
+            float err = ZDT_YAW_TARGET_DEG - yaw;
+            if (err > 180.0f)  err -= 360.0f;   /* 最短角归一化到 -180~180 */
+            if (err < -180.0f) err += 360.0f;
+            float correction = PID_Compute_Error(&s_yaw_pid, err, dt);
+            if (ZDT_YAW_DIR_INVERT != ZDT_ROTATE_DIR_INVERT) correction = -correction;
+            /* 先把旋转修正取整，再叠加到四轮，使修正量保持对称。 */
+            rot_rpm = (int16_t)(correction + (correction >= 0.0f ? 0.5f : -0.5f));
         }
 
-        /* 外环：横向激光纠偏（前后直行时用右侧激光，目标 corr_target_mm） */
-        float corr_rpm = 0.0f;
-        if (!is_lateral)
+        /* 每轮检查激光有效性，超时或超出纠偏范围时立即撤掉旧修正。 */
+        if (corr_laser != LASER_NUM)
         {
-            if (++s_pos_phase >= 3)
+            bool fresh = Laser_IsFresh(corr_laser);
+            uint16_t distance_mm = Laser_GetDistance(corr_laser);
+            if (fresh && distance_mm >= corr_min_mm && distance_mm <= corr_max_mm)
             {
-                s_pos_phase = 0;
-                if (corr_laser != LASER_NUM)
+                corr_elapsed_s += dt;
+                if (++corr_phase >= 3)
                 {
-                    uint16_t d    = Laser_GetDistance(corr_laser);
-                    uint16_t rmin = (corr_laser == LASER_RIGHT) ? ZDT_LAT_RANGE_MIN_MM : ZDT_LON_RANGE_MIN_MM;
-                    uint16_t rmax = (corr_laser == LASER_RIGHT) ? ZDT_LAT_RANGE_MAX_MM : ZDT_LON_RANGE_MAX_MM;
-                    bool     inv  = (corr_laser == LASER_RIGHT) ? ZDT_LAT_DIR_INVERT : ZDT_LON_DIR_INVERT;
-
-                    if (Laser_IsValid(corr_laser) && d >= rmin && d <= rmax)
-                    {
-                        /* 前/右激光：err = 目标 - 实测；后激光：err = 实测 - 目标 */
-                        float err = (corr_laser == LASER_BACK)
-                                    ? ((float)d - (float)corr_target_mm)
-                                    : ((float)corr_target_mm - (float)d);
-                        corr_rpm = PID_Compute_Error(&s_corr_pid, err, dt * 3.0f);
-                        if (inv) corr_rpm = -corr_rpm;
-                    }
-                    else
-                    {
-                        PID_Reset(&s_corr_pid);
-                    }
+                    /* 前/右激光：err = 目标 - 实测；后激光：err = 实测 - 目标 */
+                    float err = (float)corr_target_mm - (float)distance_mm;
+                    if (corr_laser == LASER_BACK) err = -err;
+                    corr_rpm = PID_Compute_Error(&s_corr_pid, err, corr_elapsed_s);
+                    if (corr_inverted) corr_rpm = -corr_rpm;
+                    corr_phase = 0;
+                    corr_elapsed_s = 0.0f;
                 }
             }
+            else
+            {
+                PID_Reset(&s_corr_pid);
+                corr_phase = 0;
+                corr_elapsed_s = 0.0f;
+                corr_rpm = 0.0f;
+            }
         }
-
-        /* 第一项是减速用的主激光：接近停车点时降到爬行速度（creep_rpm=0 表示不减速）。 */
-        int16_t cruise = base_rpm;
-        if (creep_rpm != 0 && cruise > creep_rpm && cond_num > 0 && zdt_approaching_stop(&conds[0], creep_range_mm))
-            cruise = creep_rpm;
 
         /* 位置修正方向：right → 左移，front/back → 后退 */
         ZDT_MoveDir corr_dir = (corr_laser == LASER_RIGHT) ? MOVE_LEFT : MOVE_BACKWARD;
 
-        /* 合成：巡航 + 位置修正 + 航向修正 */
+        /* 基准转速（RPM）直接叠加位置和航向修正，得到四轮目标转速。 */
         int16_t rpm[MOTOR_NUM];
         for (int i = 0; i < MOTOR_NUM; i++)
         {
-            float v = (float)cruise * (float)s_dir_table[dir][i]
+            float v = (float)base_rpm * (float)s_dir_table[dir][i]
                     + corr_rpm * (float)s_dir_table[corr_dir][i]
                     + rot_rpm * (float)s_rot_table[0][i];
             if (v >  3000.0f) v =  3000.0f;
             if (v < -3000.0f) v = -3000.0f;
             rpm[i] = (int16_t)v;
         }
-        zdt_chassis_speed_synced(rpm, acc);
+        /* Emm 0 档直接应用目标转速。快速段发令失败时尝试同步停车。 */
+        if (!zdt_chassis_speed_synced(rpm, ZDT_DEFAULT_ACC) && monitor_stop)
+        {
+            ZDT_Chassis_Stop();
+            return false;
+        }
 
         osDelay(10);   /* 内环 10ms（角度环高频） */
     }
 
-    ZDT_Chassis_Stop();
-    return true;
+    /* 到点后下发同步立即停车指令。 */
+    bool stopped = ZDT_Chassis_Stop();
+    return stopped || !monitor_stop;
+}
+
+bool ZDT_Chassis_Drive(ZDT_MoveDir dir, int16_t base_rpm,
+                       const ZDT_AuxCond *conds, int cond_num,
+                       LaserID corr_laser, uint16_t corr_target_mm)
+{
+    return zdt_chassis_drive(dir, base_rpm, conds, cond_num, corr_laser, corr_target_mm, false);
+}
+
+bool ZDT_Chassis_Drive_Monitored(ZDT_MoveDir dir, int16_t base_rpm,
+                                 const ZDT_AuxCond *conds, int cond_num,
+                                 LaserID corr_laser, uint16_t corr_target_mm)
+{
+    if (base_rpm <= 0 || cond_num <= 0 || conds == NULL || conds[0].max_mm == 0) return false;
+    /* 故障停车关闭时，距离阈值继续决定停车，超时和发送失败不触发主动停车。 */
+    return zdt_chassis_drive(dir, base_rpm, conds, cond_num, corr_laser, corr_target_mm,
+                             ZDT_CHASSIS_FAULT_STOP_ENABLED != 0);
 }
 
 uint32_t ZDT_Move_Duration_Ms(float distance_mm)
 {
-    float wheel_circ_mm;   /* 轮子周长(mm) */
-    float sec;             /* 理论运动时间(s) */
-
-    if (distance_mm < 0.0f) distance_mm = -distance_mm;
-
-    /* 时间(s) = 圈数 / 转速(rps) = (距离 / 轮周长 * 减速比) / (RPM / 60) */
-    wheel_circ_mm = ZDT_PI * ZDT_WHEEL_DIAMETER_MM;
-    sec = distance_mm / wheel_circ_mm * ZDT_GEAR_RATIO * 60.0f / ZDT_DEFAULT_SPEED_RPM;
-
-    /* 加 20% 余量，覆盖加速度爬升与电机响应时间 */
-    return (uint32_t)(sec * 1000.0f * 1.2f);
+    return zdt_move_duration_ms(distance_mm, ZDT_DEFAULT_SPEED_RPM);
 }
 
 uint32_t ZDT_Rotate_Duration_Ms(float angle_deg)
@@ -746,7 +707,7 @@ static PID_t s_lon_pid;
 static bool  s_lon_pid_inited = false;
 
 /** 左右平移 + 前侧激光纵向居中（闭环）：向 dir 方向以 base_rpm 连续行驶 distance_mm，
- *  每个控制周期读前侧激光做纵向 PID（目标 ZDT_LON_TARGET_MM，有效范围 20~400mm），
+ *  每个控制周期读前侧激光做纵向 PID（目标 ZDT_LON_TARGET_MM，按 ZDT_LON_RANGE_*_MM 判断纠偏范围），
  *  把前后修正量叠加到四轮转速上，行驶完指定距离后停车。dir 仅用于 MOVE_LEFT / MOVE_RIGHT。
  *  阻塞式。
  */
@@ -826,7 +787,7 @@ bool ZDT_Chassis_Drive_LongCenter(ZDT_MoveDir dir, int16_t base_rpm, float dista
 
 /** 左右平移 + 前/后激光纵向居中（闭环）：向 dir 方向以 base_rpm 连续行驶，
  *  每个控制周期读 lon_laser（前侧或后侧激光）做纵向 PID（目标 ZDT_LON_TARGET_MM，
- *  有效范围 20~400mm），把前后修正量叠加到四轮转速上，直到右侧激光 <= stop_mm 停车。
+ *  按 ZDT_LON_RANGE_*_MM 判断纠偏范围），把前后修正量叠加到四轮转速上，直到右侧激光 <= stop_mm 停车。
  *  dir 仅用于 MOVE_LEFT / MOVE_RIGHT。阻塞式。
  */
 bool ZDT_Chassis_Drive_LatCenter(ZDT_MoveDir dir, int16_t base_rpm,
@@ -922,6 +883,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         Coord_FeedByte(huart);
         return;
     }
+
+    /* USART6 = 夹爪舵机反馈 */
+    if (huart == &huart6)
+    {
+        Claw_FeedByte(huart);
+        return;
+    }
 }
 
 /** 串口出错（如溢出 ORE/帧错 FE）：恢复对应驱动的单字节接收，避免断流 */
@@ -936,6 +904,12 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     if (huart == &huart4)
     {
         Coord_UART_Error(huart);
+        return;
+    }
+
+    if (huart == &huart6)
+    {
+        Claw_UART_Error(huart);
         return;
     }
 }

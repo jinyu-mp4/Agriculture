@@ -88,8 +88,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  /* 上电后等待外设供电稳定，再统一初始化。 */
-  HAL_Delay(1000U);
+
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */

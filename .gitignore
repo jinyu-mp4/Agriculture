@@ -15,7 +15,3 @@ others/
 # 系统杂项
 Thumbs.db
 Desktop.ini
-
-# debug 调试/改动文档（覆盖上方 Debug/ 编译产物的大小写不敏感误匹配）
-!debug/
-!debug/**
