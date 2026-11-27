@@ -11,9 +11,6 @@
 
 #include "claw.h"
 #include "cmsis_os.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include <stdio.h>
 #include <string.h>
 
 /* 串口发送超时(ms) */
@@ -21,12 +18,10 @@
 
 /* 反馈帧缓冲最大长度 */
 #define CLAW_REPLY_MAX         64
-#define CLAW_POSITION_WAIT_MS  100U   /* 发送查询后等待位置回读的时间（ms）。 */
 
-/* 舵机 ID 为 000，位置字段单位为 µs，开到位回读允许 ±30 µs。 */
-#define CLAW_OPEN_POSITION_US  660U
-#define CLAW_CLOSE_POSITION_US 1000U
-#define CLAW_OPEN_TOLERANCE_US 30U
+/* 开闭各用一条固定串口指令。舵机 ID 为 000，位置字段四位，T0500 为 500 ms。 */
+static const char CLAW_OPEN_CMD[] = "#000P0660T0500!";
+static const char CLAW_CLOSE_CMD[] = "#000P1000T0500!";
 
 /* 接收解析状态 */
 static uint8_t s_rx_byte;                       /* 单字节 IT 接收缓冲 */
@@ -51,61 +46,14 @@ static bool claw_send(const char *cmd)
     return false;
 }
 
-static bool claw_move(unsigned position)
-{
-    /* ID 固定三位，位置和动作时间各四位。T0500 为 500 ms。 */
-    char command[sizeof("#000P1000T0500!")];
-    snprintf(command, sizeof(command), "#000P%04uT0500!", position);
-    return claw_send(command);
-}
-
 bool Claw_Open(void)
 {
-    return claw_move(CLAW_OPEN_POSITION_US);
+    return claw_send(CLAW_OPEN_CMD);
 }
 
 bool Claw_Close(void)
 {
-    return claw_move(CLAW_CLOSE_POSITION_US);
-}
-
-ClawOpenStatus Claw_CheckOpen(void)
-{
-    uint32_t frame = s_frame_count;
-    if (!claw_send("#000PRAD!")) return CLAW_OPEN_NO_REPLY;
-
-    uint32_t start = osKernelGetTickCount();
-    while (osKernelGetTickCount() - start < CLAW_POSITION_WAIT_MS)
-    {
-        /* 中断保存的有效位置帧形如 #000P0660。查询回显和其他舵机应答不参与判断。 */
-        char reply[sizeof("#000P0660")];
-        taskENTER_CRITICAL();
-        uint32_t current_frame = s_frame_count;
-        if (current_frame != frame) memcpy(reply, s_last, sizeof(reply));
-        taskEXIT_CRITICAL();
-
-        if (current_frame != frame)
-        {
-            frame = current_frame;
-            if (memcmp(reply, "#000P", 5) == 0)
-            {
-                unsigned position = 0;
-                size_t digit = 5;
-                while (digit < sizeof(reply) - 1 && reply[digit] >= '0' && reply[digit] <= '9')
-                {
-                    position = position * 10U + (unsigned)(reply[digit++] - '0');
-                }
-                if (digit >= 8 && reply[digit] == '\0' && position >= 500U && position <= 2500U)
-                {
-                    return (position >= CLAW_OPEN_POSITION_US - CLAW_OPEN_TOLERANCE_US &&
-                            position <= CLAW_OPEN_POSITION_US + CLAW_OPEN_TOLERANCE_US)
-                           ? CLAW_OPEN_REACHED : CLAW_OPEN_MISMATCH;
-                }
-            }
-        }
-        osDelay(5);
-    }
-    return CLAW_OPEN_NO_REPLY;
+    return claw_send(CLAW_CLOSE_CMD);
 }
 
 void Claw_Init(void)

@@ -33,17 +33,6 @@ bool Claw_Open(void);
 /** 发送闭合指令，返回串口是否成功发出。 */
 bool Claw_Close(void);
 
-/* 放蛋后查询舵机位置，用于区分已打开、位置偏差和未收到有效回读。 */
-typedef enum
-{
-    CLAW_OPEN_NO_REPLY,
-    CLAW_OPEN_REACHED,
-    CLAW_OPEN_MISMATCH
-} ClawOpenStatus;
-
-/** 通过 USART6 查询开爪位置，等待有效反馈最多 100 ms。 */
-ClawOpenStatus Claw_CheckOpen(void);
-
 /** 初始化：为 USART6 启动单字节中断接收（用于抓夹爪回传，诊断故障）。 */
 void Claw_Init(void);
 
